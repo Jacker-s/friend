@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "135221802523",
+    "project_id": "frend-eb335",
+    "storage_bucket": "frend-eb335.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:135221802523:android:8cfbdd04414729b244eabe",
+        "android_client_info": {
+          "package_name": "com.jack.friend"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAs2AKTk2uHSOU3x8e7eauvq1dnQe0h4Bs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
