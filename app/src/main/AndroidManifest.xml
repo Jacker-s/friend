@@ -33,6 +33,7 @@
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <application
+        android:name=".FriendApplication"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -47,6 +48,15 @@
             android:name=".MessagingService"
             android:exported="false"
             android:foregroundServiceType="remoteMessaging" />
+
+        <receiver
+            android:name=".CallActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="ACTION_ACCEPT" />
+                <action android:name="ACTION_REJECT" />
+            </intent-filter>
+        </receiver>
 
         <!-- SERVIÇO FCM PRINCIPAL PARA RECEBER MENSAGENS -->
         <service

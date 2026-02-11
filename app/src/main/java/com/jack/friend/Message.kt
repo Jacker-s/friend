@@ -48,5 +48,6 @@ data class Message(
     var isCall: Boolean = false,
     var callRoomId: String? = null,
     var callType: String? = null,
-    var callStatus: String? = null
+    var callStatus: String? = null,
+    var expiryTime: Long? = null
 ) : Serializable

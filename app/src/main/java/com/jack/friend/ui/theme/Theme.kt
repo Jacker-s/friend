@@ -20,50 +20,62 @@ data class ChatColors(
     val topBar: Color,
     val onTopBar: Color,
     val primary: Color,
-    val fab: Color
+    val secondaryBackground: Color,
+    val tertiaryBackground: Color,
+    val separator: Color,
+    val textPrimary: Color,
+    val textSecondary: Color
 )
 
 val LocalChatColors = staticCompositionLocalOf {
     ChatColors(
-        bubbleMe = FriendBubbleMe,
-        bubbleOther = FriendBubbleOther,
-        background = FriendBackground,
-        topBar = FriendSurface,
-        onTopBar = FriendOnSurface,
-        primary = FriendPrimary,
-        fab = FriendSecondary
+        bubbleMe = MessengerBlue,
+        bubbleOther = MessengerBubbleOther,
+        background = Color.White,
+        topBar = Color.White,
+        onTopBar = Color.Black,
+        primary = MessengerBlue,
+        secondaryBackground = MetaGray1,
+        tertiaryBackground = MetaGray2,
+        separator = MetaGray3,
+        textPrimary = Color.Black,
+        textSecondary = MetaGray4
     )
 }
 
-// SwiftUI-like Typography
 val AppTypography = Typography(
+    displayLarge = TextStyle(
+        fontFamily = FontFamily.Default,
+        fontWeight = FontWeight.Bold,
+        fontSize = 30.sp,
+        letterSpacing = (-0.5).sp
+    ),
     titleLarge = TextStyle(
         fontFamily = FontFamily.Default,
         fontWeight = FontWeight.Bold,
-        fontSize = 34.sp,
-        lineHeight = 41.sp,
-        letterSpacing = 0.37.sp
+        fontSize = 24.sp,
+        letterSpacing = (-0.3).sp
     ),
     titleMedium = TextStyle(
         fontFamily = FontFamily.Default,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 20.sp,
-        lineHeight = 25.sp,
-        letterSpacing = 0.38.sp
+        fontSize = 18.sp
     ),
     bodyLarge = TextStyle(
         fontFamily = FontFamily.Default,
         fontWeight = FontWeight.Normal,
-        fontSize = 17.sp,
-        lineHeight = 22.sp,
-        letterSpacing = (-0.41).sp
+        fontSize = 16.sp
+    ),
+    bodyMedium = TextStyle(
+        fontFamily = FontFamily.Default,
+        fontWeight = FontWeight.Normal,
+        fontSize = 14.sp
     ),
     labelSmall = TextStyle(
         fontFamily = FontFamily.Default,
         fontWeight = FontWeight.Medium,
         fontSize = 12.sp,
-        lineHeight = 16.sp,
-        letterSpacing = 0.sp
+        color = MetaGray4
     )
 )
 
@@ -84,7 +96,6 @@ fun FriendTheme(
             }
         }
         uiPrefs.registerOnSharedPreferenceChangeListener(listener)
-        isDarkModePref = uiPrefs.getBoolean("dark_mode", false)
         onDispose {
             uiPrefs.unregisterOnSharedPreferenceChangeListener(listener)
         }
@@ -96,34 +107,38 @@ fun FriendTheme(
         else -> darkTheme
     }
 
-    val primaryColor = FriendPrimary
-
     val colorScheme = if (actualDark) {
         darkColorScheme(
-            primary = primaryColor,
-            background = Color(0xFF000000), // Pure black for OLED
-            surface = Color(0xFF1C1C1E),    // iOS Dark Gray
+            primary = MessengerBlue,
+            background = MetaBlack,
+            surface = MetaDarkGray,
             onSurface = Color.White,
-            onSurfaceVariant = SystemGray
+            onSurfaceVariant = MetaGray4,
+            outline = MetaDarkSurface
         )
     } else {
         lightColorScheme(
-            primary = primaryColor,
-            background = FriendBackground,
-            surface = FriendSurface,
-            onSurface = FriendOnSurface,
-            onSurfaceVariant = FriendOnSurfaceVariant
+            primary = MessengerBlue,
+            background = Color.White,
+            surface = Color.White,
+            onSurface = Color.Black,
+            onSurfaceVariant = MetaGray4,
+            outline = MetaGray3
         )
     }
 
     val chatColors = ChatColors(
-        bubbleMe = primaryColor,
-        bubbleOther = if (actualDark) Color(0xFF262629) else FriendBubbleOther,
-        background = if (actualDark) Color(0xFF000000) else FriendBackground,
-        topBar = if (actualDark) Color(0xFF1C1C1E) else FriendSurface,
-        onTopBar = if (actualDark) Color.White else FriendOnSurface,
-        primary = primaryColor,
-        fab = FriendSecondary
+        bubbleMe = MessengerBlue,
+        bubbleOther = if (actualDark) MessengerBubbleOtherDark else MessengerBubbleOther,
+        background = if (actualDark) MetaBlack else Color.White,
+        topBar = if (actualDark) MetaBlack else Color.White,
+        onTopBar = if (actualDark) Color.White else Color.Black,
+        primary = MessengerBlue,
+        secondaryBackground = if (actualDark) MetaDarkSurface else MetaGray1,
+        tertiaryBackground = if (actualDark) MetaDarkGray else MetaGray2,
+        separator = if (actualDark) MetaDarkSurface else MetaGray3,
+        textPrimary = if (actualDark) Color.White else Color.Black,
+        textSecondary = MetaGray4
     )
 
     CompositionLocalProvider(LocalChatColors provides chatColors) {

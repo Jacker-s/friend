@@ -20,6 +20,7 @@ coil = "2.5.0"
 gson = "2.13.2"
 biometric = "1.4.0-alpha02"
 playServicesAuth = "21.3.0"
+cloudinary = "3.0.2"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -56,6 +57,7 @@ play-services-auth = { group = "com.google.android.gms", name = "play-services-a
 
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
+cloudinary-android = { group = "com.cloudinary", name = "cloudinary-android", version.ref = "cloudinary" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

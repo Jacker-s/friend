@@ -20,7 +20,8 @@ data class ChatSummary(
     var isMuted: Boolean = false,
     var isTyping: Boolean = false,
     var isEphemeral: Boolean = false,
-    var isGroup: Boolean = false
+    var isGroup: Boolean = false,
+    var presenceStatus: String = "Online"
 )
 
 @IgnoreExtraProperties

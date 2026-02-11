@@ -2,19 +2,25 @@ package com.jack.friend
 
 import android.Manifest
 import android.content.Intent
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.launch
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -22,28 +28,44 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBackIos
-import androidx.compose.material.icons.automirrored.filled.Backspace
+import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -55,15 +77,18 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.jack.friend.ui.theme.*
-import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.common.api.ApiException
+import kotlinx.coroutines.delay
+import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.roundToInt
 
 class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        WebRTCManager.initialize(applicationContext)
         setContent {
             FriendTheme {
                 val viewModel: ChatViewModel = viewModel()
@@ -75,7 +100,19 @@ class MainActivity : FragmentActivity() {
                 val correctPin = remember { prefs.getString("security_pin", "") ?: "" }
                 var isUnlocked by remember { mutableStateOf(!(isPinEnabled || isBiometricEnabled)) }
 
-                // Iniciar o serviço de mensagens em background se logado
+                val lifecycleOwner = LocalLifecycleOwner.current
+                DisposableEffect(lifecycleOwner) {
+                    val observer = LifecycleEventObserver { _, event ->
+                        when (event) {
+                            Lifecycle.Event.ON_RESUME -> FriendApplication.isAppInForeground = true
+                            Lifecycle.Event.ON_PAUSE -> FriendApplication.isAppInForeground = false
+                            else -> {}
+                        }
+                    }
+                    lifecycleOwner.lifecycle.addObserver(observer)
+                    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+                }
+
                 LaunchedEffect(isUserLoggedIn) {
                     if (isUserLoggedIn) {
                         val serviceIntent = Intent(context, MessagingService::class.java)
@@ -111,95 +148,112 @@ fun LoginScreen(viewModel: ChatViewModel) {
     var email by remember { mutableStateOf("") }; var password by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }; var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
     var isSignUp by remember { mutableStateOf(false) }; var loading by remember { mutableStateOf(false) }
-    val context = LocalContext.current; val googleSignInClient = remember { getGoogleSignInClient(context) }
-    val chatColors = LocalChatColors.current
-    val googleLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
-        try {
-            val account = task.getResult(ApiException::class.java)
-            account?.idToken?.let { token ->
-                loading = true
-                viewModel.signInWithGoogle(token) { s, e -> loading = false; if (!s) Toast.makeText(context, e ?: "Erro Google", Toast.LENGTH_SHORT).show() }
-            }
-        } catch (e: Exception) { }
-    }
+    val context = LocalContext.current
+    
     val photoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? -> selectedImageUri = uri }
 
-    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        Text(text = if (isSignUp) "Nova Conta" else "Bem-vindo", style = MaterialTheme.typography.titleLarge)
-        Spacer(modifier = Modifier.height(48.dp))
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 30.dp).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Top) {
+        Spacer(modifier = Modifier.height(100.dp))
+        Icon(Icons.AutoMirrored.Filled.Chat, null, modifier = Modifier.size(80.dp), tint = MessengerBlue)
+        Spacer(modifier = Modifier.height(20.dp))
+        Text(text = if (isSignUp) "Crie sua conta" else "Bem-vindo de volta", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold)
+        Spacer(modifier = Modifier.height(40.dp))
+        
         if (isSignUp) {
-            Box(modifier = Modifier.size(100.dp).clip(CircleShape).background(SystemGray5).clickable { photoLauncher.launch("image/*") }, contentAlignment = Alignment.Center) {
+            Box(modifier = Modifier.size(110.dp).clip(CircleShape).background(LocalChatColors.current.separator).clickable { photoLauncher.launch("image/*") }, contentAlignment = Alignment.Center) {
                 if (selectedImageUri != null) AsyncImage(model = selectedImageUri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                else Icon(Icons.Default.AddAPhoto, null, modifier = Modifier.size(32.dp), tint = SystemGray)
+                else Icon(Icons.Default.AddAPhoto, null, modifier = Modifier.size(36.dp), tint = MessengerBlue)
             }
-            Spacer(modifier = Modifier.height(24.dp))
-            TextField(value = username, onValueChange = { username = it }, placeholder = { Text("Usuário") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
+            Spacer(modifier = Modifier.height(30.dp))
+            MetaTextField(username, { username = it }, "Nome de usuário")
             Spacer(modifier = Modifier.height(12.dp))
         }
-        TextField(value = email, onValueChange = { email = it }, placeholder = { Text("E-mail") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
+        MetaTextField(email, { email = it }, "E-mail ou Telefone", keyboardType = KeyboardType.Email)
         Spacer(modifier = Modifier.height(12.dp))
-        TextField(value = password, onValueChange = { password = it }, placeholder = { Text("Senha") }, modifier = Modifier.fillMaxWidth(), visualTransformation = PasswordVisualTransformation(), shape = RoundedCornerShape(12.dp))
-        Spacer(modifier = Modifier.height(32.dp))
-        if (loading) CircularProgressIndicator()
+        MetaTextField(password, { password = it }, "Senha", isPassword = true)
+        Spacer(modifier = Modifier.height(40.dp))
+        
+        if (loading) CircularProgressIndicator(color = MessengerBlue)
         else {
-            Button(onClick = {
-                loading = true
-                if (isSignUp) viewModel.signUp(email, password, username, selectedImageUri) { s, e -> loading = false; if (!s) Toast.makeText(context, e ?: "Erro", Toast.LENGTH_SHORT).show() }
-                else viewModel.login(email, password) { s, e -> loading = false; if (!s) Toast.makeText(context, e ?: "Erro", Toast.LENGTH_SHORT).show() }
-            }, modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(14.dp), colors = ButtonDefaults.buttonColors(containerColor = chatColors.primary)) {
-                Text(if (isSignUp) "Criar Conta" else "Entrar", color = Color.White, fontWeight = FontWeight.Bold)
-            }
+            Button(onClick = { loading = true; if (isSignUp) viewModel.signUp(email, password, username, selectedImageUri) { s, e -> loading = false; if (!s) Toast.makeText(context, e ?: "Erro", Toast.LENGTH_SHORT).show() } else viewModel.login(email, password) { s, e -> loading = false; if (!s) Toast.makeText(context, e ?: "Erro", Toast.LENGTH_SHORT).show() } }, modifier = Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(25.dp), colors = ButtonDefaults.buttonColors(containerColor = MessengerBlue)) { Text(if (isSignUp) "Registrar" else "Entrar", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold, color = Color.White) }
             Spacer(modifier = Modifier.height(16.dp))
-            OutlinedButton(onClick = { googleLauncher.launch(googleSignInClient.signInIntent) }, modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(14.dp)) {
-                Icon(Icons.Default.AccountCircle, null, tint = chatColors.primary); Spacer(Modifier.width(8.dp)); Text("Continuar com Google")
-            }
-            TextButton(onClick = { isSignUp = !isSignUp }) { Text(if (isSignUp) "Já tem conta? Entre" else "Criar nova conta") }
+            TextButton(onClick = { isSignUp = !isSignUp }, modifier = Modifier.padding(top = 20.dp)) { Text(text = if (isSignUp) "Já tem uma conta? Conectar" else "Não tem conta? Criar novo perfil", color = MessengerBlue, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold) }
         }
     }
 }
 
 @Composable
+fun MetaTextField(value: String, onValueChange: (String) -> Unit, placeholder: String, isPassword: Boolean = false, keyboardType: KeyboardType = KeyboardType.Email) {
+    TextField(value = value, onValueChange = onValueChange, placeholder = { Text(placeholder, color = MetaGray4) }, modifier = Modifier.fillMaxWidth(), visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None, keyboardOptions = KeyboardOptions(keyboardType = keyboardType), shape = RoundedCornerShape(12.dp), singleLine = true, textStyle = MaterialTheme.typography.bodyLarge, colors = TextFieldDefaults.colors(focusedContainerColor = LocalChatColors.current.tertiaryBackground, unfocusedContainerColor = LocalChatColors.current.tertiaryBackground, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, cursorColor = MessengerBlue, focusedTextColor = MaterialTheme.colorScheme.onSurface, unfocusedTextColor = MaterialTheme.colorScheme.onSurface))
+}
+
+@Composable
 fun PinLockScreen(correctPin: String, isBiometricEnabled: Boolean, onUnlock: () -> Unit) {
-    var pinInput by remember { mutableStateOf("") }; val chatColors = LocalChatColors.current; val context = LocalContext.current as? FragmentActivity ?: return
+    var pinInput by remember { mutableStateOf("") }
+    val activity = LocalActivity.current
+    val view = LocalView.current
     fun showBiometricPrompt() {
-        val executor = ContextCompat.getMainExecutor(context)
-        val biometricPrompt = androidx.biometric.BiometricPrompt(context, executor, object : androidx.biometric.BiometricPrompt.AuthenticationCallback() {
+        val fragmentActivity = activity as? FragmentActivity ?: return
+        val executor = ContextCompat.getMainExecutor(fragmentActivity)
+        val biometricPrompt = androidx.biometric.BiometricPrompt(fragmentActivity, executor, object : androidx.biometric.BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: androidx.biometric.BiometricPrompt.AuthenticationResult) { super.onAuthenticationSucceeded(result); onUnlock() }
         })
-        val promptInfo = androidx.biometric.BiometricPrompt.PromptInfo.Builder().setTitle("Bloqueio").setSubtitle("Use biometria para acessar").setNegativeButtonText("Usar PIN").build()
+        val promptInfo = androidx.biometric.BiometricPrompt.PromptInfo.Builder().setTitle("Bloqueio de Segurança").setSubtitle("Use biometria para entrar").setNegativeButtonText("Usar PIN").build()
         biometricPrompt.authenticate(promptInfo)
     }
     LaunchedEffect(Unit) { if (isBiometricEnabled) showBiometricPrompt() }
-    Column(modifier = Modifier.fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        Icon(Icons.Default.Lock, null, modifier = Modifier.size(64.dp), tint = chatColors.primary)
-        Spacer(modifier = Modifier.height(24.dp)); Text("App Bloqueado", style = MaterialTheme.typography.titleLarge)
+    Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Icon(Icons.Default.Lock, null, modifier = Modifier.size(64.dp), tint = MessengerBlue)
+        Spacer(modifier = Modifier.height(24.dp)); Text("App Protegido", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(32.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) { repeat(4) { index -> Box(modifier = Modifier.size(16.dp).clip(CircleShape).background(if (pinInput.length > index) chatColors.primary else SystemGray4)) } }
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) { repeat(4) { index -> Box(modifier = Modifier.size(16.dp).clip(CircleShape).background(if (pinInput.length > index) MessengerBlue else LocalChatColors.current.separator)) } }
         Spacer(modifier = Modifier.height(48.dp))
         val keys = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", "DEL")
-        LazyVerticalGrid(columns = GridCells.Fixed(3), modifier = Modifier.width(280.dp), verticalArrangement = Arrangement.spacedBy(16.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        LazyVerticalGrid(columns = GridCells.Fixed(3), modifier = Modifier.width(280.dp), verticalArrangement = Arrangement.spacedBy(20.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
             items(keys) { key ->
-                if (key.isNotEmpty()) Box(modifier = Modifier.size(72.dp).clip(CircleShape).background(SystemGray6).clickable { if (key == "DEL") { if (pinInput.isNotEmpty()) pinInput = pinInput.dropLast(1) } else if (pinInput.length < 4) { pinInput += key; if (pinInput.length == 4) { if (pinInput == correctPin) onUnlock() else pinInput = "" } } }, contentAlignment = Alignment.Center) {
-                    if (key == "DEL") Icon(Icons.AutoMirrored.Filled.Backspace, null) else Text(key, style = MaterialTheme.typography.titleMedium)
-                } else Spacer(Modifier.size(72.dp))
+                if (key.isNotEmpty()) {
+                    val isDel = key == "DEL"
+                    Box(modifier = Modifier.size(75.dp).clip(CircleShape).background(LocalChatColors.current.tertiaryBackground).clickable { 
+                        view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        if (isDel) { if (pinInput.isNotEmpty()) pinInput = pinInput.dropLast(1) } else if (pinInput.length < 4) { pinInput += key; if (pinInput.length == 4) { if (pinInput == correctPin) onUnlock() else { pinInput = ""; if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) view.performHapticFeedback(HapticFeedbackConstants.REJECT) } } } 
+                    }, contentAlignment = Alignment.Center) { if (isDel) Icon(Icons.AutoMirrored.Filled.Backspace, null, tint = MaterialTheme.colorScheme.onSurface) else Text(key, style = MaterialTheme.typography.titleMedium.copy(fontSize = 28.sp)) }
+                } else Spacer(Modifier.size(75.dp))
             }
         }
-        if (isBiometricEnabled) IconButton(onClick = { showBiometricPrompt() }, modifier = Modifier.padding(top = 24.dp)) { Icon(Icons.Default.Fingerprint, null, modifier = Modifier.size(40.dp), tint = chatColors.primary) }
+        if (isBiometricEnabled) IconButton(onClick = { showBiometricPrompt() }, modifier = Modifier.padding(top = 24.dp)) { Icon(Icons.Default.Fingerprint, null, modifier = Modifier.size(40.dp), tint = MessengerBlue) }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(viewModel: ChatViewModel = viewModel()) {
-    val myId by viewModel.myId.collectAsStateWithLifecycle(""); val myPhotoUrl by viewModel.myPhotoUrl.collectAsStateWithLifecycle(null)
+    val myUsername by viewModel.myUsername.collectAsStateWithLifecycle("")
+    val myPhotoUrl by viewModel.myPhotoUrl.collectAsStateWithLifecycle(null)
     val targetId by viewModel.targetId.collectAsStateWithLifecycle(""); val targetProfile by viewModel.targetProfile.collectAsStateWithLifecycle(null)
     val targetGroup by viewModel.targetGroup.collectAsStateWithLifecycle(null); val messages by viewModel.messages.collectAsStateWithLifecycle(emptyList())
     val activeChats by viewModel.activeChats.collectAsStateWithLifecycle(emptyList()); val searchResults by viewModel.searchResults.collectAsStateWithLifecycle(emptyList())
     val statuses by viewModel.statuses.collectAsStateWithLifecycle(emptyList()); val isTargetTyping by viewModel.isTargetTyping.collectAsStateWithLifecycle(false)
+    val blockedUsers by viewModel.blockedUsers.collectAsStateWithLifecycle(emptyList())
+    val contacts by viewModel.contacts.collectAsStateWithLifecycle(emptyList())
+    val recordingDuration by viewModel.recordingDuration.collectAsStateWithLifecycle()
+    val pinnedMessage by viewModel.pinnedMessage.collectAsStateWithLifecycle()
 
-    val context = LocalContext.current; val listState = rememberLazyListState(); val chatColors = LocalChatColors.current
+    val context = LocalContext.current; val listState = rememberLazyListState()
     var textState by remember { mutableStateOf("") }; var searchInput by remember { mutableStateOf("") }; var isSearching by remember { mutableStateOf(false) }
+    var fullScreenImageUrl by remember { mutableStateOf<String?>(null) }
+    var showAttachmentMenu by remember { mutableStateOf(false) }
+    var showOptionsMenu by remember { mutableStateOf(false) }
+    var tempMessageDuration by remember { mutableIntStateOf(0) }
+    var showClearChatDialog by remember { mutableStateOf(false) }
+    var showContacts by remember { mutableStateOf(false) }
+    var showAddContactDialog by remember { mutableStateOf(false) }
+    var showCreateGroup by remember { mutableStateOf(false) }
+    
+    var replyingTo by remember { mutableStateOf<Message?>(null) }
+    var editingMessage by remember { mutableStateOf<Message?>(null) }
+    
+    var viewingStatuses by remember { mutableStateOf<List<UserStatus>?>(null) }
+    var selectedFilter by remember { mutableStateOf("Tudo") }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -207,137 +261,780 @@ fun ChatScreen(viewModel: ChatViewModel = viewModel()) {
         lifecycleOwner.lifecycle.addObserver(observer); onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    LaunchedEffect(targetId) { if (targetId.isNotEmpty()) viewModel.markAsRead() }
-    BackHandler(enabled = targetId.isNotEmpty() || isSearching) { if (isSearching) { isSearching = false; searchInput = ""; viewModel.searchUsers("") } else viewModel.setTargetId("") }
-    val imageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let { viewModel.uploadImage(it, false) } }
+    LaunchedEffect(messages.size) { if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1) }
+    LaunchedEffect(targetId) { 
+        if (targetId.isNotEmpty()) {
+            viewModel.markAsRead()
+            FriendApplication.currentOpenedChatId = targetId
+        } else {
+            FriendApplication.currentOpenedChatId = "LISTA_CONVERSAS"
+        }
+    }
+
+    BackHandler(enabled = targetId.isNotEmpty() || isSearching || fullScreenImageUrl != null || showContacts || viewingStatuses != null || showCreateGroup) {
+        if (viewingStatuses != null) viewingStatuses = null
+        else if (fullScreenImageUrl != null) fullScreenImageUrl = null
+        else if (isSearching) { isSearching = false; searchInput = ""; viewModel.searchUsers("") }
+        else if (showCreateGroup) showCreateGroup = false
+        else if (showContacts) showContacts = false
+        else viewModel.setTargetId("")
+    }
+
+    val imageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let { viewModel.uploadImage(uri, targetGroup != null, tempMessageDuration) } }
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
+        bitmap?.let {
+            val bytes = ByteArrayOutputStream()
+            it.compress(Bitmap.CompressFormat.JPEG, 100, bytes)
+            @Suppress("DEPRECATION")
+            val path = MediaStore.Images.Media.insertImage(context.contentResolver, it, "Image_${System.currentTimeMillis()}", null)
+            val uri = Uri.parse(path)
+            viewModel.uploadImage(uri, targetGroup != null, tempMessageDuration)
+        }
+    }
     val statusLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let { viewModel.uploadStatus(it) } }
 
     Scaffold(
         topBar = {
-            CenterAlignedTopAppBar(
-                title = {
-                    if (targetId.isNotEmpty()) {
-                        val currentChat = activeChats.find { it.friendId == targetId }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(if (targetGroup != null) (targetGroup?.name ?: "Grupo") else (targetProfile?.name ?: currentChat?.friendName ?: targetId), style = MaterialTheme.typography.titleMedium.copy(fontSize = 17.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            if (isTargetTyping) Text("digitando...", style = MaterialTheme.typography.labelSmall, color = AppleBlue)
-                            else if (targetProfile?.isOnline == true) Text("online", style = MaterialTheme.typography.labelSmall, color = AppleGreen)
+            if (viewingStatuses == null) {
+                Column(modifier = Modifier.background(LocalChatColors.current.topBar)) {
+                    CenterAlignedTopAppBar(
+                        title = {
+                            if (targetId.isNotEmpty()) {
+                                val currentChat = activeChats.find { it.friendId == targetId }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    AsyncImage(model = targetGroup?.photoUrl ?: targetProfile?.photoUrl ?: currentChat?.friendPhotoUrl, contentDescription = null, modifier = Modifier.size(36.dp).clip(CircleShape).background(LocalChatColors.current.separator), contentScale = ContentScale.Crop)
+                                    Spacer(Modifier.width(10.dp))
+                                    val titleText = if (targetGroup != null) (targetGroup?.name ?: "Grupo") else (targetProfile?.name ?: currentChat?.friendName ?: targetId)
+                                    Column {
+                                        Text(titleText, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        if (isTargetTyping) Text("Digitando...", style = MaterialTheme.typography.labelSmall, color = MessengerBlue)
+                                        else if (targetGroup != null) Text("${targetGroup?.members?.size ?: 0} membros", style = MaterialTheme.typography.labelSmall, color = MetaGray4)
+                                        else if (targetProfile != null) {
+                                            val presenceColor = when(targetProfile?.presenceStatus) {
+                                                "Online" -> Color(0xFF31A24C)
+                                                "Ocupado" -> Color(0xFFFA3E3E)
+                                                "Ausente" -> Color(0xFFFFB02E)
+                                                else -> MetaGray4
+                                            }
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                if (targetProfile?.isOnline == true && targetProfile?.presenceStatus != "Invisível") {
+                                                    Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(presenceColor))
+                                                    Spacer(Modifier.width(4.dp))
+                                                    Text(targetProfile?.presenceStatus ?: "Online", style = MaterialTheme.typography.labelSmall, color = presenceColor)
+                                                } else {
+                                                    Text("Offline", style = MaterialTheme.typography.labelSmall, color = MetaGray4)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text(if (showCreateGroup) "Novo Grupo" else if (showContacts) "Contatos" else "Conversas", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold)
+                                }
+                            }
+                        },
+                        navigationIcon = { 
+                            if (targetId.isNotEmpty()) IconButton(onClick = { viewModel.setTargetId("") }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MessengerBlue) }
+                            else if (showCreateGroup) IconButton(onClick = { showCreateGroup = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MessengerBlue) }
+                            else if (showContacts) IconButton(onClick = { showContacts = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MessengerBlue) }
+                            else IconButton(onClick = { context.startActivity(Intent(context, SettingsActivity::class.java)) }) { AsyncImage(model = myPhotoUrl, contentDescription = null, modifier = Modifier.size(32.dp).clip(CircleShape).background(LocalChatColors.current.separator), contentScale = ContentScale.Crop) }
+                        },
+                        actions = {
+                            if (targetId.isNotEmpty()) {
+                                if (targetGroup == null) {
+                                    IconButton(onClick = {
+                                        viewModel.startCall(isVideo = false, isGroup = false)
+                                        val callKey = "WapiCall_Private_${if (myUsername < targetId) "${myUsername.lowercase()}_${targetId.lowercase()}" else "${targetId.lowercase()}_${myUsername.lowercase()}"}"
+                                        context.startActivity(Intent(context, CallActivity::class.java).apply { 
+                                            putExtra("roomId", callKey)
+                                            putExtra("targetId", targetId)
+                                            putExtra("isOutgoing", true)
+                                            putExtra("isVideo", false)
+                                        })
+                                    }) { Icon(Icons.Default.Call, null, tint = MessengerBlue) }
+                                }
+                                Box {
+                                    IconButton(onClick = { showOptionsMenu = true }) { Icon(Icons.Default.Info, null, tint = MessengerBlue) }
+                                    DropdownMenu(expanded = showOptionsMenu, onDismissRequest = { showOptionsMenu = false }, modifier = Modifier.background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))) {
+                                        DropdownMenuItem(text = { Text("Limpar conversa") }, leadingIcon = { Icon(Icons.Default.CleaningServices, null) }, onClick = { showOptionsMenu = false; showClearChatDialog = true })
+                                        if (targetGroup == null) {
+                                            DropdownMenuItem(text = { Text("Mensagens Temporárias") }, leadingIcon = { Icon(Icons.Default.Timer, null) }, onClick = { tempMessageDuration = if(tempMessageDuration == 0) 24 else 0; showOptionsMenu = false })
+                                            val isBlocked = blockedUsers.contains(targetId)
+                                            DropdownMenuItem(text = { Text(if(isBlocked) "Desbloquear" else "Bloquear") }, leadingIcon = { Icon(if(isBlocked) Icons.Default.LockOpen else Icons.Default.Block, null, tint = Color(0xFFFA3E3E)) }, onClick = { if(isBlocked) viewModel.unblockUser(targetId) else viewModel.blockUser(targetId); showOptionsMenu = false })
+                                        }
+                                    }
+                                }
+                            } else if (showContacts && !showCreateGroup) {
+                                IconButton(onClick = { showCreateGroup = true }) { Icon(Icons.Default.GroupAdd, null, tint = MessengerBlue) }
+                                IconButton(onClick = { showAddContactDialog = true }) { Icon(Icons.Default.PersonAdd, null, tint = MessengerBlue) }
+                            }
+                        },
+                        colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = LocalChatColors.current.topBar)
+                    )
+                    if (targetId.isEmpty() && !showCreateGroup) {
+                        MetaSearchBar(value = searchInput, onValueChange = { searchInput = it; viewModel.searchUsers(it) }, isSearching = isSearching, onActiveChange = { isSearching = it })
+                        if (!isSearching) {
+                            TelegramTabs(selectedFilter) { selectedFilter = it }
                         }
-                    } else if (isSearching) {
-                        TextField(value = searchInput, onValueChange = { searchInput = it; viewModel.searchUsers(it) }, placeholder = { Text("Buscar") }, modifier = Modifier.fillMaxWidth().height(44.dp), singleLine = true, shape = RoundedCornerShape(10.dp))
-                    } else Text("Conversas", style = MaterialTheme.typography.titleMedium)
-                },
-                navigationIcon = { if (targetId.isNotEmpty()) IconButton(onClick = { viewModel.setTargetId("") }) { Icon(Icons.AutoMirrored.Filled.ArrowBackIos, null, tint = chatColors.primary, modifier = Modifier.size(20.dp)) } else if (isSearching) IconButton(onClick = { isSearching = false; searchInput = ""; viewModel.searchUsers("") }) { Icon(Icons.Default.Close, null, tint = chatColors.primary) } },
-                actions = { if (targetId.isEmpty() && !isSearching) { IconButton(onClick = { isSearching = true }) { Icon(Icons.Default.Search, null, tint = chatColors.primary) }; IconButton(onClick = { context.startActivity(Intent(context, SettingsActivity::class.java)) }) { AsyncImage(model = myPhotoUrl, contentDescription = null, modifier = Modifier.size(28.dp).clip(CircleShape).background(SystemGray4), contentScale = ContentScale.Crop) } } else if (targetId.isNotEmpty()) { 
-                    IconButton(onClick = { 
-                        val myUsername = viewModel.myUsername.value
-                        val callKey = "WapiCall_Private_${if (myUsername < targetId) "${myUsername.lowercase()}_${targetId.lowercase()}" else "${targetId.lowercase()}_${myUsername.lowercase()}"}"
-                        viewModel.startCall(false, false)
-                        val intent = Intent(context, CallActivity::class.java).apply {
-                            putExtra("roomId", callKey)
-                            putExtra("targetId", targetId)
-                            putExtra("isOutgoing", true)
-                        }
-                        context.startActivity(intent)
-                    }) { Icon(Icons.Default.Call, null, tint = chatColors.primary) } 
-                } }
-            )
+                    }
+                }
+            }
         },
-        bottomBar = { if (targetId.isNotBlank()) SwiftInput(text = textState, onTextChange = { textState = it; viewModel.setTyping(it.isNotEmpty()) }, onImageClick = { imageLauncher.launch("image/*") }, onSend = { if (textState.isNotBlank()) { viewModel.sendMessage(textState, false); textState = "" } }, onAudioStart = { viewModel.startRecording(context.cacheDir) }, onAudioStop = { viewModel.stopRecording(false) }) }
+        floatingActionButton = {
+            if (targetId.isEmpty() && !showContacts && viewingStatuses == null) {
+                FloatingActionButton(onClick = { showContacts = true }, containerColor = MessengerBlue, contentColor = Color.White, shape = CircleShape) { Icon(Icons.Default.Chat, null) }
+            }
+        },
+        bottomBar = { 
+            if (targetId.isNotBlank() && viewingStatuses == null) {
+                Column {
+                    if (pinnedMessage != null) {
+                        Surface(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp).clickable { /* Scroll to message */ }, color = LocalChatColors.current.secondaryBackground, shape = RoundedCornerShape(8.dp)) {
+                            Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Box(modifier = Modifier.width(2.dp).height(30.dp).background(MessengerBlue))
+                                Spacer(Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Mensagem Fixada", color = MessengerBlue, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    Text(pinnedMessage?.text ?: "Mídia", maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
+                                }
+                                IconButton(onClick = { viewModel.unpinMessage() }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.Close, null, modifier = Modifier.size(16.dp)) }
+                            }
+                        }
+                    }
+                    if (replyingTo != null || editingMessage != null) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                            color = LocalChatColors.current.secondaryBackground,
+                            shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
+                        ) {
+                            Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Box(modifier = Modifier.width(4.dp).height(40.dp).background(MessengerBlue, RoundedCornerShape(2.dp)))
+                                Spacer(Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(if (editingMessage != null) "Editar mensagem" else (replyingTo?.senderName ?: replyingTo?.senderId ?: ""), color = MessengerBlue, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                    val text = editingMessage?.text ?: replyingTo?.text ?: if (replyingTo?.imageUrl != null) "📷 Imagem" else if (replyingTo?.audioUrl != null) "🎤 Áudio" else ""
+                                    Text(text, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 14.sp)
+                                }
+                                IconButton(onClick = { replyingTo = null; editingMessage = null; if(editingMessage != null) textState = "" }) { Icon(Icons.Default.Close, null, modifier = Modifier.size(18.dp)) }
+                            }
+                        }
+                    }
+                    MetaInput(
+                        text = textState, 
+                        onTextChange = { textState = it; viewModel.setTyping(it.isNotEmpty()) }, 
+                        onAddClick = { showAttachmentMenu = true }, 
+                        onSend = { 
+                            if (textState.isNotBlank()) { 
+                                if (editingMessage != null) {
+                                    viewModel.editMessage(editingMessage!!, textState)
+                                } else {
+                                    viewModel.sendMessage(textState, targetGroup != null, tempMessageDuration, replyingTo)
+                                }
+                                textState = ""; replyingTo = null; editingMessage = null
+                            } 
+                        }, 
+                        onAudioStart = { viewModel.startRecording(context.cacheDir) }, 
+                        onAudioStop = { cancel -> viewModel.stopRecording(targetGroup != null, tempMessageDuration, cancel) }, 
+                        onLikeClick = { viewModel.sendMessage("👍", targetGroup != null, tempDurationHours = tempMessageDuration, replyingTo = replyingTo); replyingTo = null },
+                        recordingDuration = recordingDuration
+                    ) 
+                }
+            }
+        }
     ) { innerPadding ->
         Box(modifier = Modifier.padding(innerPadding).fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             if (targetId.isEmpty()) {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    if (!isSearching) { SwiftStatusRow(statuses, myPhotoUrl) { statusLauncher.launch("image/*") }; HorizontalDivider(color = SystemGray5, thickness = 0.5.dp) }
-                    LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        if (isSearching && searchInput.isNotEmpty()) items(searchResults) { user -> SwiftUserItem(user) { isSearching = false; viewModel.setTargetId(user.id, false) } }
-                        else items(activeChats, key = { it.friendId }) { summary -> SwiftChatItem(summary, myId) { viewModel.setTargetId(summary.friendId, summary.isGroup) } }
+                if (showCreateGroup) {
+                    CreateGroupScreen(contacts, onCreate = { name, members, uri ->
+                        viewModel.createGroup(name, members, uri) { success, id ->
+                            if (success) {
+                                showCreateGroup = false
+                                showContacts = false
+                                viewModel.setTargetId(id!!, true)
+                            } else {
+                                Toast.makeText(context, id ?: "Erro", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    })
+                } else if (showContacts) {
+                    ContactsScreen(contacts, onContactClick = { user -> showContacts = false; viewModel.setTargetId(user.id, false) })
+                } else {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        if (!isSearching) { 
+                            MetaStatusRow(
+                                statuses = statuses, 
+                                myPhotoUrl = myPhotoUrl, 
+                                myUsername = myUsername,
+                                onAdd = { statusLauncher.launch("image/*") }, 
+                                onViewUserStatuses = { viewingStatuses = it }
+                            ) 
+                        }
+                        val filteredChats = when(selectedFilter) {
+                            "Grupos" -> activeChats.filter { it.isGroup }
+                            "Não Lidas" -> activeChats.filter { it.hasUnread }
+                            else -> activeChats
+                        }
+                        LazyColumn(modifier = Modifier.fillMaxSize()) {
+                            if (isSearching && searchInput.isNotEmpty()) items(searchResults) { user -> 
+                                val isContact = contacts.any { it.id == user.id }
+                                MetaUserItem(user, isContact = isContact, onChatClick = { isSearching = false; viewModel.setTargetId(user.id, false) }, onAddContactClick = { viewModel.addContact(user.id) { _, _ -> } }) 
+                            }
+                            else if (!isSearching || searchInput.isEmpty()) items(filteredChats, key = { it.friendId }) { summary -> MetaSwipeChatItem(summary, onDelete = { viewModel.deleteChat(summary.friendId) }, onMarkUnread = { }, onClick = { viewModel.setTargetId(summary.friendId, summary.isGroup) }) }
+                        }
                     }
                 }
             } else {
-                val myUsername by viewModel.myUsername.collectAsStateWithLifecycle("")
-                LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp), contentPadding = PaddingValues(top = 16.dp, bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    items(messages, key = { it.id }) { message -> SwiftMessageBubble(message, message.senderId == myUsername) }
+                LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp), contentPadding = PaddingValues(top = 16.dp, bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    itemsIndexed(messages, key = { _, m -> m.id }) { index, message ->
+                        val isMe = message.senderId == myUsername
+                        val prevMsg = if (index > 0) messages[index - 1] else null
+                        val nextMsg = if (index < messages.size - 1) messages[index + 1] else null
+                        
+                        val isFirstInGroup = prevMsg == null || prevMsg.senderId != message.senderId || (message.timestamp - prevMsg.timestamp > 60000)
+                        val isLastInGroup = nextMsg == null || nextMsg.senderId != message.senderId || (nextMsg.timestamp - message.timestamp > 60000)
+                        
+                        if (isFirstInGroup) {
+                            val dateText = formatDateHeader(message.timestamp)
+                            val prevDateText = if (prevMsg != null) formatDateHeader(prevMsg.timestamp) else ""
+                            if (dateText != prevDateText) {
+                                DateHeader(dateText)
+                            }
+                        }
+
+                        MetaMessageBubble(
+                            message = message,
+                            isMe = isMe,
+                            targetPhotoUrl = if (message.isGroup) message.senderPhotoUrl else targetProfile?.photoUrl,
+                            isFirstInGroup = isFirstInGroup,
+                            isLastInGroup = isLastInGroup,
+                            onImageClick = { fullScreenImageUrl = it },
+                            onDelete = { viewModel.deleteMessage(it, if (isMe) message.receiverId else message.senderId, message.isGroup) },
+                            onReply = { replyingTo = message },
+                            onReact = { viewModel.addReaction(message, it) },
+                            onEdit = { editingMessage = message; textState = message.text },
+                            onPin = { viewModel.pinMessage(message) }
+                        )
+                    }
+                }
+            }
+            if (showAttachmentMenu) { ModalBottomSheet(onDismissRequest = { showAttachmentMenu = false }, containerColor = LocalChatColors.current.secondaryBackground, dragHandle = { BottomSheetDefaults.DragHandle() }) { Row(modifier = Modifier.fillMaxWidth().padding(bottom = 40.dp, top = 20.dp), horizontalArrangement = Arrangement.SpaceEvenly) { AttachmentItem(icon = Icons.Default.CameraAlt, label = "Câmera", color = Color(0xFFFA3E3E)) { showAttachmentMenu = false; cameraLauncher.launch() }; AttachmentItem(icon = Icons.Default.Photo, label = "Galeria", color = InstagramPurple) { showAttachmentMenu = false; imageLauncher.launch("image/*") } } } }
+            if (fullScreenImageUrl != null) { Box(modifier = Modifier.fillMaxSize().background(Color.Black).clickable { fullScreenImageUrl = null }, contentAlignment = Alignment.Center) { AsyncImage(model = fullScreenImageUrl, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit); IconButton(onClick = { fullScreenImageUrl = null }, modifier = Modifier.align(Alignment.TopEnd).padding(40.dp)) { Icon(Icons.Default.Close, null, tint = Color.White, modifier = Modifier.size(30.dp)) } } }
+            if (showClearChatDialog) { AlertDialog(onDismissRequest = { showClearChatDialog = false }, title = { Text("Limpar Conversa") }, text = { Text("Isso apagará todas as mensagens para ambos.") }, confirmButton = { TextButton(onClick = { viewModel.clearChat(targetId, targetGroup != null); showClearChatDialog = false }) { Text("Limpar", color = Color(0xFFFA3E3E)) } }, dismissButton = { TextButton(onClick = { showClearChatDialog = false }) { Text("Cancelar") } }) }
+            if (showAddContactDialog) { AddContactDialog(onDismiss = { showAddContactDialog = false }, onAdd = { username -> viewModel.addContact(username) { success, error -> if (success) showAddContactDialog = false else Toast.makeText(context, error ?: "Erro ao adicionar", Toast.LENGTH_SHORT).show() } }) }
+            
+            if (viewingStatuses != null) {
+                StatusViewer(
+                    userStatuses = viewingStatuses!!, 
+                    myUsername = myUsername,
+                    onClose = { viewingStatuses = null },
+                    onDelete = { id -> viewModel.deleteStatus(id); viewingStatuses = null }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun CreateGroupScreen(contacts: List<UserProfile>, onCreate: (String, List<String>, Uri?) -> Unit) {
+    var groupName by remember { mutableStateOf("") }
+    var selectedMembers by remember { mutableStateOf(setOf<String>()) }
+    var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
+    val photoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? -> selectedImageUri = uri }
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(modifier = Modifier.size(64.dp).clip(CircleShape).background(LocalChatColors.current.separator).clickable { photoLauncher.launch("image/*") }, contentAlignment = Alignment.Center) {
+                if (selectedImageUri != null) AsyncImage(model = selectedImageUri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                else Icon(Icons.Default.CameraAlt, null, tint = MessengerBlue)
+            }
+            Spacer(Modifier.width(16.dp))
+            MetaTextField(groupName, { groupName = it }, "Nome do grupo")
+        }
+        Spacer(Modifier.height(24.dp))
+        Text("Selecionar Membros (${selectedMembers.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        LazyColumn(modifier = Modifier.weight(1f)) {
+            items(contacts) { contact ->
+                Row(modifier = Modifier.fillMaxWidth().clickable { if (selectedMembers.contains(contact.id)) selectedMembers -= contact.id else selectedMembers += contact.id }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    AsyncImage(model = contact.photoUrl, contentDescription = null, modifier = Modifier.size(40.dp).clip(CircleShape).background(LocalChatColors.current.separator), contentScale = ContentScale.Crop)
+                    Spacer(Modifier.width(12.dp))
+                    Text(contact.name, modifier = Modifier.weight(1f))
+                    Checkbox(checked = selectedMembers.contains(contact.id), onCheckedChange = null)
                 }
             }
         }
-    }
-}
-
-@Composable
-fun SwiftStatusRow(statuses: List<UserStatus>, myPhotoUrl: String?, onAdd: () -> Unit) {
-    LazyRow(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp), contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        item { Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { onAdd() }) { Box { AsyncImage(model = myPhotoUrl, contentDescription = null, modifier = Modifier.size(60.dp).clip(CircleShape).background(SystemGray5), contentScale = ContentScale.Crop); Icon(Icons.Default.Add, null, modifier = Modifier.align(Alignment.BottomEnd).size(20.dp).background(AppleBlue, CircleShape).padding(2.dp), tint = Color.White) }; Text("Seu status", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 4.dp)) } }
-        items(statuses) { status -> Column(horizontalAlignment = Alignment.CenterHorizontally) { AsyncImage(model = status.userPhotoUrl, contentDescription = null, modifier = Modifier.size(60.dp).clip(CircleShape).border(2.dp, AppleBlue, CircleShape).padding(3.dp).clip(CircleShape), contentScale = ContentScale.Crop); Text(status.username, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 4.dp)) } }
-    }
-}
-
-@Composable
-fun SwiftChatItem(summary: ChatSummary, myId: String, onClick: () -> Unit) {
-    Row(modifier = Modifier.fillMaxWidth().clickable { onClick() }.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box {
-            AsyncImage(model = summary.friendPhotoUrl, contentDescription = null, modifier = Modifier.size(60.dp).clip(CircleShape).background(SystemGray5), contentScale = ContentScale.Crop)
-            if (summary.isOnline) Box(modifier = Modifier.align(Alignment.BottomEnd).size(14.dp).background(Color.White, CircleShape).padding(2.dp).background(AppleGreen, CircleShape))
+        Button(onClick = { if (groupName.isNotBlank() && selectedMembers.isNotEmpty()) onCreate(groupName, selectedMembers.toList(), selectedImageUri) }, modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp), colors = ButtonDefaults.buttonColors(containerColor = MessengerBlue)) {
+            Text("Criar Grupo", color = Color.White, fontWeight = FontWeight.Bold)
         }
-        Spacer(Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(summary.friendName ?: summary.friendId, style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold))
-                val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(summary.timestamp)); Text(time, style = MaterialTheme.typography.labelSmall, color = if (summary.hasUnread) AppleBlue else SystemGray)
+    }
+}
+
+@Composable
+fun TelegramTabs(selected: String, onSelect: (String) -> Unit) {
+    val tabs = listOf("Tudo", "Grupos", "Não Lidas")
+    ScrollableTabRow(
+        selectedTabIndex = tabs.indexOf(selected),
+        edgePadding = 16.dp,
+        containerColor = LocalChatColors.current.topBar,
+        contentColor = MessengerBlue,
+        divider = {},
+        indicator = { tabPositions ->
+            TabRowDefaults.SecondaryIndicator(
+                modifier = Modifier.tabIndicatorOffset(tabPositions[tabs.indexOf(selected)]),
+                color = MessengerBlue
+            )
+        }
+    ) {
+        tabs.forEach { title ->
+            Tab(
+                selected = selected == title,
+                onClick = { onSelect(title) },
+                text = { Text(title, style = MaterialTheme.typography.labelLarge) }
+            )
+        }
+    }
+}
+
+@Composable
+fun StatusViewer(userStatuses: List<UserStatus>, myUsername: String, onClose: () -> Unit, onDelete: (String) -> Unit) {
+    var currentIndex by remember { mutableIntStateOf(0) }
+    val currentStatus = userStatuses[currentIndex]
+    var progress by remember { mutableFloatStateOf(0f) }
+    
+    LaunchedEffect(currentIndex) {
+        progress = 0f
+        val duration = 5000L 
+        val steps = 100
+        val stepTime = duration / steps
+        for (i in 1..steps) {
+            delay(stepTime)
+            progress = i.toFloat() / steps
+        }
+        if (currentIndex < userStatuses.size - 1) currentIndex++
+        else onClose()
+    }
+
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        AsyncImage(model = currentStatus.imageUrl, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+        
+        // Camada de toque para navegação (atrás dos controles)
+        Row(modifier = Modifier.fillMaxSize()) {
+            Box(modifier = Modifier.weight(1f).fillMaxHeight().clickable { if (currentIndex > 0) currentIndex-- })
+            Box(modifier = Modifier.weight(1f).fillMaxHeight().clickable { if (currentIndex < userStatuses.size - 1) currentIndex++ else onClose() })
+        }
+
+        // Camada de controles (por cima de tudo)
+        Column(modifier = Modifier.fillMaxWidth().padding(top = 40.dp)) {
+            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                userStatuses.forEachIndexed { index, _ ->
+                    LinearProgressIndicator(
+                        progress = { if (index < currentIndex) 1f else if (index == currentIndex) progress else 0f },
+                        modifier = Modifier.weight(1f).height(2.dp).clip(RoundedCornerShape(1.dp)),
+                        color = Color.White,
+                        trackColor = Color.White.copy(alpha = 0.3f)
+                    )
+                }
             }
-            Text(text = summary.lastMessage, style = MaterialTheme.typography.bodyLarge, color = SystemGray, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Row(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                AsyncImage(model = currentStatus.userPhotoUrl, contentDescription = null, modifier = Modifier.size(40.dp).clip(CircleShape).background(Color.Gray), contentScale = ContentScale.Crop)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(currentStatus.username, color = Color.White, fontWeight = FontWeight.Bold)
+                    Text(SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(currentStatus.timestamp)), color = Color.White.copy(0.7f), fontSize = 12.sp)
+                }
+                if (currentStatus.userId == myUsername) {
+                    IconButton(onClick = { onDelete(currentStatus.id) }) { Icon(Icons.Default.Delete, null, tint = Color.White) }
+                }
+                IconButton(onClick = onClose) { Icon(Icons.Default.Close, null, tint = Color.White) }
+            }
         }
-        if (summary.hasUnread) Box(Modifier.padding(start = 8.dp).size(12.dp).background(AppleBlue, CircleShape))
-        Icon(Icons.Default.ChevronRight, null, tint = SystemGray3, modifier = Modifier.size(20.dp))
     }
 }
 
 @Composable
-fun SwiftUserItem(user: UserProfile, onClick: () -> Unit) {
-    Row(modifier = Modifier.fillMaxWidth().clickable { onClick() }.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-        AsyncImage(model = user.photoUrl, contentDescription = null, modifier = Modifier.size(44.dp).clip(CircleShape).background(SystemGray5), contentScale = ContentScale.Crop)
-        Spacer(Modifier.width(16.dp)); Text(user.name, style = MaterialTheme.typography.bodyLarge)
-    }
-}
-
-@Composable
-fun SwiftMessageBubble(message: Message, isMe: Boolean) {
-    val alignment = if (isMe) Alignment.CenterEnd else Alignment.CenterStart; val bubbleColor = if (isMe) AppleBlue else SystemGray5; val textColor = if (isMe) Color.White else Color.Black
-    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = alignment) {
-        Surface(color = bubbleColor, shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = if (isMe) 18.dp else 4.dp, bottomEnd = if (isMe) 4.dp else 18.dp), modifier = Modifier.widthIn(max = 280.dp)) {
-            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                if (message.imageUrl != null) AsyncImage(model = message.imageUrl, contentDescription = null, modifier = Modifier.fillMaxWidth().heightIn(max = 200.dp).clip(RoundedCornerShape(12.dp)), contentScale = ContentScale.Crop)
-                if (message.audioUrl != null) Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.PlayArrow, null, tint = textColor); Text("Mensagem de voz", color = textColor, modifier = Modifier.padding(start = 8.dp)) }
-                if (message.text.isNotEmpty()) Text(message.text, style = MaterialTheme.typography.bodyLarge, color = textColor)
-                Row(modifier = Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically) {
-                    val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(message.timestamp))
-                    Text(time, style = MaterialTheme.typography.labelSmall, color = textColor.copy(alpha = 0.7f))
-                    if (isMe) {
-                        Spacer(Modifier.width(4.dp))
-                        Icon(if (message.isRead) Icons.Default.DoneAll else Icons.Default.Check, null, tint = if (message.isRead) Color.Cyan else textColor.copy(alpha = 0.7f), modifier = Modifier.size(14.dp))
+fun ContactsScreen(contacts: List<UserProfile>, onContactClick: (UserProfile) -> Unit) {
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+        if (contacts.isEmpty()) {
+            item { Box(modifier = Modifier.fillParentMaxSize(), contentAlignment = Alignment.Center) { Text("Nenhum contato adicionado", color = MetaGray4) } }
+        } else {
+            items(contacts) { contact ->
+                Row(modifier = Modifier.fillMaxWidth().clickable { onContactClick(contact) }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box {
+                        AsyncImage(model = contact.photoUrl, contentDescription = null, modifier = Modifier.size(50.dp).clip(CircleShape).background(LocalChatColors.current.separator), contentScale = ContentScale.Crop)
+                        if (contact.isOnline) Box(modifier = Modifier.align(Alignment.BottomEnd).size(14.dp).background(MaterialTheme.colorScheme.background, CircleShape).padding(2.dp).background(Color(0xFF31A24C), CircleShape))
+                    }
+                    Column(modifier = Modifier.padding(start = 12.dp)) {
+                        Text(contact.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                        Text(contact.status, style = MaterialTheme.typography.bodyMedium, color = MetaGray4, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+fun AddContactDialog(onDismiss: () -> Unit, onAdd: (String) -> Unit) {
+    var username by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Adicionar Contato") },
+        text = {
+            Column {
+                Text("Digite o username exato do usuário:")
+                Spacer(Modifier.height(12.dp))
+                MetaTextField(username, { username = it }, "Username")
+            }
+        },
+        confirmButton = { TextButton(onClick = { if (username.isNotBlank()) onAdd(username) }) { Text("Adicionar") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } }
+    )
+}
+
+fun formatDateHeader(timestamp: Long): String {
+    val calendar = Calendar.getInstance()
+    val now = Calendar.getInstance()
+    calendar.timeInMillis = timestamp
+    
+    return when {
+        calendar.get(Calendar.YEAR) == now.get(Calendar.YEAR) && calendar.get(Calendar.DAY_OF_YEAR) == now.get(Calendar.DAY_OF_YEAR) -> "HOJE"
+        calendar.get(Calendar.YEAR) == now.get(Calendar.YEAR) && calendar.get(Calendar.DAY_OF_YEAR) == now.get(Calendar.DAY_OF_YEAR) - 1 -> "ONTEM"
+        else -> SimpleDateFormat("d 'DE' MMMM", Locale("pt", "BR")).format(Date(timestamp)).uppercase()
+    }
+}
+
+@Composable
+fun DateHeader(text: String) {
+    Text(text = text, style = MaterialTheme.typography.labelSmall, color = MetaGray4, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp), textAlign = TextAlign.Center)
+}
+
+@Composable
+fun AttachmentItem(icon: ImageVector, label: String, color: Color, onClick: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { onClick() }) { Box(modifier = Modifier.size(60.dp).background(color, CircleShape), contentAlignment = Alignment.Center) { Icon(icon, null, tint = Color.White, modifier = Modifier.size(30.dp)) }; Spacer(modifier = Modifier.height(8.dp)); Text(label, style = MaterialTheme.typography.labelSmall) }
+}
+
+@Composable
+fun MetaSearchBar(value: String, onValueChange: (String) -> Unit, isSearching: Boolean, onActiveChange: (Boolean) -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth().background(LocalChatColors.current.topBar).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(modifier = Modifier.weight(1f).height(40.dp).clip(RoundedCornerShape(20.dp)).background(LocalChatColors.current.tertiaryBackground).padding(horizontal = 12.dp), contentAlignment = Alignment.CenterStart) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Search, null, tint = MetaGray4, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Box(modifier = Modifier.weight(1f)) {
+                    if (value.isEmpty()) Text("Pesquisar", color = MetaGray4, style = MaterialTheme.typography.bodyLarge)
+                    BasicTextField(
+                        value = value, 
+                        onValueChange = onValueChange,
+                        modifier = Modifier.fillMaxWidth().onFocusChanged { if (it.isFocused) onActiveChange(true) }, 
+                        singleLine = true, 
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface), 
+                        cursorBrush = SolidColor(MessengerBlue)
+                    )
+                }
+                if (value.isNotEmpty()) { IconButton(onClick = { onValueChange("") }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.Close, null, tint = MetaGray4, modifier = Modifier.size(18.dp)) } }
+            }
+        }
+        AnimatedVisibility(visible = isSearching, enter = expandHorizontally() + fadeIn(), exit = shrinkHorizontally() + fadeOut()) { Text(text = "Cancelar", color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(start = 12.dp).clickable { onActiveChange(false); onValueChange("") }, style = MaterialTheme.typography.bodyLarge) }
+    }
+}
+
+@Composable
+fun MetaStatusRow(statuses: List<UserStatus>, myPhotoUrl: String?, myUsername: String, onAdd: () -> Unit, onViewUserStatuses: (List<UserStatus>) -> Unit) {
+    val grouped = statuses.groupBy { it.userId }
+    val myStatuses = grouped[myUsername] ?: emptyList()
+    val otherStatuses = grouped.filter { it.key != myUsername }
+    
+    val instaGradient = Brush.linearGradient(colors = InstagramStoryBorder)
+    
+    LazyRow(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp), contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        item { 
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { if (myStatuses.isNotEmpty()) onViewUserStatuses(myStatuses) else onAdd() }) { 
+                Box { 
+                    AsyncImage(model = myPhotoUrl, contentDescription = null, modifier = Modifier.size(65.dp).clip(CircleShape).background(LocalChatColors.current.separator), contentScale = ContentScale.Crop)
+                    if (myStatuses.isEmpty()) {
+                        Icon(Icons.Default.Add, null, modifier = Modifier.align(Alignment.BottomEnd).size(22.dp).background(Color.White, CircleShape).padding(2.dp).background(MessengerBlue, CircleShape).padding(2.dp), tint = Color.White) 
+                    } else {
+                        Box(modifier = Modifier.size(65.dp).drawBehind { drawCircle(brush = instaGradient, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3.dp.toPx())) })
+                    }
+                }
+                Text("Meu status", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 4.dp)) 
+            } 
+        }
+        otherStatuses.forEach { (_, userList) ->
+            val first = userList.first()
+            item {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { onViewUserStatuses(userList) }) { 
+                    Box(modifier = Modifier.size(65.dp).drawBehind { drawCircle(brush = instaGradient, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3.dp.toPx())) }.padding(4.dp).clip(CircleShape)) { 
+                        AsyncImage(model = first.userPhotoUrl, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop) 
+                    }
+                    Text(first.username, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 4.dp), maxLines = 1, overflow = TextOverflow.Ellipsis) 
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MetaSwipeChatItem(summary: ChatSummary, onDelete: () -> Unit, onMarkUnread: () -> Unit, onClick: () -> Unit) {
+    val dismissState = rememberSwipeToDismissBoxState(confirmValueChange = { when (it) { SwipeToDismissBoxValue.EndToStart -> { onDelete(); true }; SwipeToDismissBoxValue.StartToEnd -> { onMarkUnread(); false }; else -> false } })
+    SwipeToDismissBox(state = dismissState, enableDismissFromStartToEnd = true, enableDismissFromEndToStart = true, backgroundContent = {
+        val color = if (dismissState.dismissDirection == SwipeToDismissBoxValue.EndToStart) Color(0xFFFA3E3E) else if (dismissState.dismissDirection == SwipeToDismissBoxValue.StartToEnd) MessengerBlue else Color.Transparent
+        val alignment = when (dismissState.dismissDirection) { SwipeToDismissBoxValue.EndToStart -> Alignment.CenterEnd; SwipeToDismissBoxValue.StartToEnd -> Alignment.CenterStart; else -> Alignment.Center }
+        val icon = when (dismissState.dismissDirection) { SwipeToDismissBoxValue.EndToStart -> Icons.Default.Delete; SwipeToDismissBoxValue.StartToEnd -> Icons.AutoMirrored.Filled.Chat; else -> Icons.Default.Delete }
+        Box(modifier = Modifier.fillMaxSize().background(color).padding(horizontal = 24.dp), contentAlignment = alignment) { Icon(icon, null, tint = Color.White) }
+    }) { MetaChatItem(summary, onClick) }
+}
+
+@Composable
+fun MetaChatItem(summary: ChatSummary, onClick: () -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth().clickable { onClick() }.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box { AsyncImage(model = summary.friendPhotoUrl, contentDescription = null, modifier = Modifier.size(60.dp).clip(CircleShape).background(LocalChatColors.current.separator), contentScale = ContentScale.Crop); if (!summary.isGroup && summary.isOnline) Box(modifier = Modifier.align(Alignment.BottomEnd).size(16.dp).background(MaterialTheme.colorScheme.background, CircleShape).padding(2.dp).background(Color(0xFF31A24C), CircleShape)) }
+        Column(modifier = Modifier.weight(1f).padding(start = 12.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(summary.friendName ?: summary.friendId, style = MaterialTheme.typography.bodyLarge.copy(fontWeight = if (summary.hasUnread) FontWeight.Bold else FontWeight.Normal), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(summary.timestamp))
+                Text(time, style = MaterialTheme.typography.labelSmall, color = if (summary.hasUnread) MessengerBlue else MetaGray4)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                val lastMessage = if (summary.isTyping) "Digitando..." else summary.lastMessage
+                val color = if (summary.isTyping) MessengerBlue else if (summary.hasUnread) MaterialTheme.colorScheme.onSurface else MetaGray4
+                Text(text = lastMessage, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = if (summary.hasUnread) FontWeight.Bold else FontWeight.Normal), color = color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                if (summary.hasUnread) Box(modifier = Modifier.size(12.dp).background(MessengerBlue, CircleShape))
+            }
+        }
+    }
+}
+
+@Composable
+fun MetaUserItem(user: UserProfile, isContact: Boolean, onChatClick: () -> Unit, onAddContactClick: () -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        AsyncImage(model = user.photoUrl, contentDescription = null, modifier = Modifier.size(50.dp).clip(CircleShape).background(LocalChatColors.current.separator), contentScale = ContentScale.Crop)
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(user.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+            Text("@${user.id.lowercase()}", style = MaterialTheme.typography.labelSmall, color = MetaGray4)
+        }
+        Row {
+            if (!isContact) {
+                IconButton(onClick = onAddContactClick) { Icon(Icons.Default.PersonAdd, null, tint = MessengerBlue) }
+            }
+            IconButton(onClick = onChatClick) { Icon(Icons.AutoMirrored.Filled.Chat, null, tint = MessengerBlue) }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun MetaMessageBubble(
+    message: Message, 
+    isMe: Boolean, 
+    targetPhotoUrl: String?, 
+    isFirstInGroup: Boolean, 
+    isLastInGroup: Boolean, 
+    onImageClick: (String) -> Unit, 
+    onDelete: (String) -> Unit,
+    onReply: () -> Unit,
+    onReact: (String) -> Unit,
+    onEdit: () -> Unit,
+    onPin: () -> Unit
+) {
+    val bubbleColor = if (isMe) MessengerBlue else LocalChatColors.current.bubbleOther
+    val textColor = if (isMe) Color.White else MaterialTheme.colorScheme.onSurface
+    val view = LocalView.current; val clipboardManager = LocalClipboardManager.current
+    var showContext by remember { mutableStateOf(false) }
+    
+    val shape = if (isMe) {
+        RoundedCornerShape(
+            topStart = 20.dp,
+            topEnd = if (isFirstInGroup) 20.dp else 4.dp,
+            bottomEnd = if (isLastInGroup) 20.dp else 4.dp,
+            bottomStart = 20.dp
+        )
+    } else {
+        RoundedCornerShape(
+            topStart = if (isFirstInGroup) 20.dp else 4.dp,
+            topEnd = 20.dp,
+            bottomEnd = 20.dp,
+            bottomStart = if (isLastInGroup) 20.dp else 4.dp
+        )
+    }
+
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp), horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start, verticalAlignment = Alignment.Bottom) {
+        if (!isMe) {
+            if (isLastInGroup) {
+                AsyncImage(model = targetPhotoUrl, contentDescription = null, modifier = Modifier.size(28.dp).clip(CircleShape).background(LocalChatColors.current.separator), contentScale = ContentScale.Crop)
+            } else {
+                Spacer(Modifier.width(36.dp))
+            }
+        }
+
+        Column(horizontalAlignment = if (isMe) Alignment.End else Alignment.Start) {
+            if (message.isGroup && !isMe && isFirstInGroup) { Text(message.senderName ?: "", style = MaterialTheme.typography.labelSmall, color = MetaGray4, modifier = Modifier.padding(start = 12.dp, bottom = 2.dp)) }
+            Surface(color = bubbleColor, shape = shape, modifier = Modifier.widthIn(max = 280.dp).combinedClickable(onClick = { if (message.imageUrl != null) onImageClick(message.imageUrl!!) }, onLongClick = { view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS); showContext = true })) {
+                Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
+                    if (message.replyToId != null) {
+                        Surface(color = Color.Black.copy(0.1f), shape = RoundedCornerShape(8.dp), modifier = Modifier.padding(bottom = 4.dp).fillMaxWidth()) {
+                            Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Box(modifier = Modifier.width(2.dp).height(30.dp).background(MessengerBlue))
+                                Column(modifier = Modifier.padding(start = 8.dp)) {
+                                    Text(message.replyToName ?: "", color = MessengerBlue, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                    Text(message.replyToText ?: "", color = textColor.copy(0.7f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                        }
+                    }
+                    if (message.imageUrl != null) AsyncImage(model = message.imageUrl, contentDescription = null, modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp).clip(RoundedCornerShape(12.dp)), contentScale = ContentScale.Crop)
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        if (message.text.isNotEmpty()) {
+                            Text(text = message.text, style = MaterialTheme.typography.bodyLarge.copy(color = textColor), modifier = Modifier.weight(1f, fill = false))
+                        }
+                        if (message.isEdited) {
+                            Text("editada", style = MaterialTheme.typography.labelSmall, color = textColor.copy(alpha = 0.6f), modifier = Modifier.padding(start = 4.dp))
+                        }
+                    }
+                }
+            }
+            
+            // Reações
+            if (!message.reactions.isNullOrEmpty()) {
+                Row(modifier = Modifier.offset(y = (-8).dp, x = if(isMe) (-12).dp else 12.dp).background(MaterialTheme.colorScheme.surface, CircleShape).border(1.dp, LocalChatColors.current.separator, CircleShape).padding(horizontal = 6.dp, vertical = 2.dp)) {
+                    message.reactions?.values?.distinct()?.take(3)?.forEach { emoji ->
+                        Text(emoji, fontSize = 12.sp)
+                    }
+                    if (message.reactions!!.size > 1) {
+                        Text(message.reactions!!.size.toString(), fontSize = 10.sp, modifier = Modifier.padding(start = 2.dp))
+                    }
+                }
+            }
+
+            if (isMe && isLastInGroup) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp, end = 4.dp)) {
+                    val tint = if (message.isRead) MessengerBlue else MetaGray4.copy(0.5f)
+                    Icon(if (message.isRead) Icons.Default.DoneAll else Icons.Default.Check, null, tint = tint, modifier = Modifier.size(14.dp))
+                }
+            }
+        }
+    }
+
+    if (showContext) { 
+        val emojis = listOf("❤️", "😂", "😮", "😢", "🙏", "👍")
+        AlertDialog(
+            onDismissRequest = { showContext = false },
+            confirmButton = {},
+            title = {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    emojis.forEach { emoji ->
+                        Text(emoji, modifier = Modifier.clickable { onReact(emoji); showContext = false }.padding(8.dp), fontSize = 24.sp)
+                    }
+                }
+            },
+            text = {
+                Column {
+                    ListItem(headlineContent = { Text("Responder") }, leadingContent = { Icon(Icons.AutoMirrored.Filled.Reply, null) }, modifier = Modifier.clickable { onReply(); showContext = false })
+                    if (isMe) ListItem(headlineContent = { Text("Editar") }, leadingContent = { Icon(Icons.Default.Edit, null) }, modifier = Modifier.clickable { onEdit(); showContext = false })
+                    ListItem(headlineContent = { Text("Fixar") }, leadingContent = { Icon(Icons.Default.PushPin, null) }, modifier = Modifier.clickable { onPin(); showContext = false })
+                    ListItem(headlineContent = { Text("Copiar") }, leadingContent = { Icon(Icons.Default.ContentCopy, null) }, modifier = Modifier.clickable { clipboardManager.setText(AnnotatedString(message.text)); showContext = false })
+                    ListItem(headlineContent = { Text("Remover", color = Color.Red) }, leadingContent = { Icon(Icons.Default.Delete, null, tint = Color.Red) }, modifier = Modifier.clickable { onDelete(message.id); showContext = false })
+                }
+            }
+        )
     }
 }
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-fun SwiftInput(text: String, onTextChange: (String) -> Unit, onImageClick: () -> Unit, onSend: () -> Unit, onAudioStart: () -> Unit, onAudioStop: () -> Unit) {
-    Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f), modifier = Modifier.fillMaxWidth().navigationBarsPadding().imePadding()) {
-        Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onImageClick) { Icon(Icons.Default.Add, null, tint = AppleBlue, modifier = Modifier.size(28.dp)) }
-            TextField(value = text, onValueChange = onTextChange, placeholder = { Text("Mensagem") }, modifier = Modifier.weight(1f).heightIn(min = 36.dp, max = 120.dp), shape = RoundedCornerShape(20.dp), colors = TextFieldDefaults.colors(focusedContainerColor = SystemGray6, unfocusedContainerColor = SystemGray6, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent))
-            if (text.isNotEmpty()) IconButton(onClick = onSend) { Icon(Icons.Default.ArrowUpward, null, tint = Color.White, modifier = Modifier.background(AppleBlue, CircleShape).padding(4.dp).size(20.dp)) }
-            else {
-                IconButton(onClick = {}, modifier = Modifier.pointerInteropFilter { 
-                    when (it.action) {
-                        MotionEvent.ACTION_DOWN -> { onAudioStart(); true }
-                        MotionEvent.ACTION_UP -> { onAudioStop(); true }
-                        else -> false
+fun MetaInput(
+    text: String, 
+    onTextChange: (String) -> Unit, 
+    onAddClick: () -> Unit, 
+    onSend: () -> Unit, 
+    onAudioStart: () -> Unit, 
+    onAudioStop: (Boolean) -> Unit, 
+    onLikeClick: () -> Unit,
+    recordingDuration: Long
+) {
+    var isRecording by remember { mutableStateOf(false) }
+    var dragX by remember { mutableFloatStateOf(0f) }
+    val isCancelled = dragX < -150f
+    
+    val scale by animateFloatAsState(if (isRecording) 1.2f else 1f, label = "")
+    val color by animateColorAsState(if (isCancelled) Color.Gray else if (isRecording) Color.Red else MessengerBlue, label = "")
+
+    Surface(color = LocalChatColors.current.topBar, modifier = Modifier.fillMaxWidth().navigationBarsPadding().imePadding()) {
+        Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp), verticalAlignment = Alignment.Bottom) {
+            if (!isRecording) {
+                IconButton(onClick = onAddClick) { 
+                    Icon(Icons.Default.AddCircle, null, tint = MessengerBlue, modifier = Modifier.size(26.dp))
+                }
+            }
+            
+            Box(modifier = Modifier.weight(1f).height(40.dp).clip(RoundedCornerShape(20.dp)).background(LocalChatColors.current.tertiaryBackground).padding(horizontal = 16.dp, vertical = 8.dp), contentAlignment = Alignment.CenterStart) {
+                if (isRecording) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(Color.Red).graphicsLayer {
+                            alpha = if (System.currentTimeMillis() % 1000 < 500) 1f else 0.2f
+                        })
+                        Spacer(Modifier.width(8.dp))
+                        val minutes = (recordingDuration / 60000)
+                        val seconds = (recordingDuration % 60000) / 1000
+                        Text(text = String.format("%02d:%02d", minutes, seconds), color = MaterialTheme.colorScheme.onSurface)
+                        Spacer(Modifier.weight(1f))
+                        Text(text = if (isCancelled) "Solte para cancelar" else "Deslize para cancelar <", color = MetaGray4, fontSize = 12.sp)
                     }
-                }) { Icon(Icons.Default.Mic, null, tint = AppleBlue, modifier = Modifier.size(24.dp)) }
+                } else {
+                    if (text.isEmpty()) Text("Mensagem...", color = MetaGray4, style = MaterialTheme.typography.bodyLarge)
+                    BasicTextField(
+                        value = text, 
+                        onValueChange = onTextChange,
+                        modifier = Modifier.fillMaxWidth(), 
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface), 
+                        cursorBrush = SolidColor(MessengerBlue)
+                    )
+                }
+            }
+            
+            if (text.isNotEmpty() && !isRecording) {
+                IconButton(onClick = onSend) {
+                    Icon(Icons.AutoMirrored.Filled.Send, null, tint = MessengerBlue) 
+                }
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(modifier = Modifier
+                        .scale(scale)
+                        .pointerInput(Unit) {
+                            detectDragGestures(
+                                onDragStart = { 
+                                    isRecording = true
+                                    dragX = 0f
+                                    onAudioStart()
+                                },
+                                onDragEnd = {
+                                    onAudioStop(isCancelled)
+                                    isRecording = false
+                                    dragX = 0f
+                                },
+                                onDragCancel = {
+                                    onAudioStop(true)
+                                    isRecording = false
+                                },
+                                onDrag = { _, dragAmount ->
+                                    dragX += dragAmount.x
+                                }
+                            )
+                        }
+                    ) {
+                        IconButton(onClick = {}) {
+                            Icon(Icons.Default.Mic, null, tint = color, modifier = Modifier.size(26.dp))
+                        }
+                    }
+                    if (!isRecording) {
+                        IconButton(onClick = onLikeClick) {
+                            Icon(Icons.Default.ThumbUp, null, tint = MessengerBlue)
+                        }
+                    }
+                }
             }
         }
     }

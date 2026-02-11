@@ -1,6 +1,7 @@
 package com.jack.friend
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
@@ -11,6 +12,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -18,7 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBackIos
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -54,12 +56,14 @@ class SettingsActivity : ComponentActivity() {
                 val viewModel: ChatViewModel = viewModel()
                 val myName by viewModel.myName.collectAsStateWithLifecycle("")
                 val myPhotoUrl by viewModel.myPhotoUrl.collectAsStateWithLifecycle(null)
+                val myPresenceStatus by viewModel.myPresenceStatus.collectAsStateWithLifecycle("Online")
 
                 val securityPrefs = remember { context.getSharedPreferences("security_prefs", MODE_PRIVATE) }
                 val privacyPrefs = remember { context.getSharedPreferences("privacy_prefs", MODE_PRIVATE) }
 
                 var nameInput by remember { mutableStateOf("") }
                 var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
+                var selectedPresence by remember { mutableStateOf(myPresenceStatus) }
 
                 var isPinEnabled by remember { mutableStateOf(securityPrefs.getBoolean("pin_enabled", false)) }
                 var isBiometricEnabled by remember { mutableStateOf(securityPrefs.getBoolean("biometric_enabled", false)) }
@@ -68,8 +72,10 @@ class SettingsActivity : ComponentActivity() {
                 var showPinDialog by remember { mutableStateOf(false) }
                 var pinInput by remember { mutableStateOf("") }
                 var showDeleteAccountDialog by remember { mutableStateOf(false) }
+                var showPresenceMenu by remember { mutableStateOf(false) }
 
                 LaunchedEffect(myName) { if (nameInput.isEmpty()) nameInput = myName }
+                LaunchedEffect(myPresenceStatus) { selectedPresence = myPresenceStatus }
 
                 val photoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
                     selectedImageUri = uri
@@ -78,23 +84,23 @@ class SettingsActivity : ComponentActivity() {
                 Scaffold(
                     topBar = {
                         CenterAlignedTopAppBar(
-                            title = { Text("Ajustes", style = MaterialTheme.typography.titleMedium.copy(fontSize = 17.sp)) },
+                            title = { Text("Eu", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold) },
                             navigationIcon = {
-                                TextButton(onClick = { finish() }) {
-                                    Icon(Icons.AutoMirrored.Filled.ArrowBackIos, null, modifier = Modifier.size(18.dp), tint = AppleBlue)
-                                    Text("Voltar", color = AppleBlue, style = MaterialTheme.typography.bodyLarge)
+                                IconButton(onClick = { finish() }) {
+                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MaterialTheme.colorScheme.onSurface)
                                 }
                             },
                             actions = {
                                 TextButton(onClick = {
-                                    viewModel.updateProfile(nameInput, selectedImageUri)
+                                    viewModel.updateProfile(nameInput, selectedImageUri, presenceStatus = selectedPresence)
                                     uiPrefs.edit().putBoolean("dark_mode", isDarkMode).apply()
                                     Toast.makeText(context, "Salvo", Toast.LENGTH_SHORT).show()
                                     finish()
                                 }) {
-                                    Text("OK", color = AppleBlue, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge)
+                                    Text("Concluir", color = MessengerBlue, fontWeight = FontWeight.Bold)
                                 }
-                            }
+                            },
+                            colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = LocalChatColors.current.topBar)
                         )
                     }
                 ) { innerPadding ->
@@ -105,69 +111,124 @@ class SettingsActivity : ComponentActivity() {
                             .padding(innerPadding)
                             .verticalScroll(rememberScrollState())
                     ) {
-                        // Profile Header
-                        Box(modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
-                            Box(modifier = Modifier.size(90.dp).clip(CircleShape).background(SystemGray5).clickable { photoLauncher.launch("image/*") }) {
+                        // Profile Header (Messenger Style)
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Box(modifier = Modifier.size(100.dp)) {
                                 AsyncImage(
                                     model = selectedImageUri ?: myPhotoUrl,
                                     contentDescription = null,
-                                    modifier = Modifier.fillMaxSize(),
+                                    modifier = Modifier.fillMaxSize().clip(CircleShape).background(LocalChatColors.current.separator),
                                     contentScale = ContentScale.Crop
                                 )
-                                Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(0.1f)), contentAlignment = Alignment.Center) {
-                                    Icon(Icons.Default.CameraAlt, null, tint = Color.White.copy(0.7f), modifier = Modifier.size(24.dp))
+                                IconButton(
+                                    onClick = { photoLauncher.launch("image/*") },
+                                    modifier = Modifier.align(Alignment.BottomEnd).size(32.dp).background(LocalChatColors.current.tertiaryBackground, CircleShape).padding(4.dp)
+                                ) {
+                                    Icon(Icons.Default.CameraAlt, null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(16.dp))
+                                }
+                            }
+                            Spacer(Modifier.height(16.dp))
+                            Text(text = nameInput, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                            
+                            // Presence Selector
+                            Box(modifier = Modifier.padding(top = 8.dp)) {
+                                Surface(
+                                    onClick = { showPresenceMenu = true },
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = LocalChatColors.current.tertiaryBackground,
+                                    modifier = Modifier.height(32.dp)
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 12.dp)) {
+                                        val color = when(selectedPresence) {
+                                            "Online" -> Color(0xFF31A24C)
+                                            "Ocupado" -> Color(0xFFFA3E3E)
+                                            "Ausente" -> Color(0xFFFFB02E)
+                                            else -> Color.Gray
+                                        }
+                                        Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(color))
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(selectedPresence, style = MaterialTheme.typography.labelMedium)
+                                        Icon(Icons.Default.ArrowDropDown, null, modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                                DropdownMenu(expanded = showPresenceMenu, onDismissRequest = { showPresenceMenu = false }) {
+                                    listOf("Online", "Ocupado", "Ausente", "Invisível").forEach { status ->
+                                        DropdownMenuItem(
+                                            text = { Text(status) },
+                                            onClick = { selectedPresence = status; showPresenceMenu = false },
+                                            leadingIcon = {
+                                                val color = when(status) {
+                                                    "Online" -> Color(0xFF31A24C)
+                                                    "Ocupado" -> Color(0xFFFA3E3E)
+                                                    "Ausente" -> Color(0xFFFFB02E)
+                                                    else -> Color.Gray
+                                                }
+                                                Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(color))
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }
 
-                        SwiftSettingsSection {
-                            SwiftSettingsTextField(label = "Nome", value = nameInput, onValueChange = { nameInput = it })
+                        MetaSettingsSection {
+                            MetaSettingsTextField(label = "Nome", value = nameInput, onValueChange = { nameInput = it })
                         }
 
-                        Text("CONFIGURAÇÕES", modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp), style = MaterialTheme.typography.labelSmall, color = SystemGray)
+                        Text("PREFERÊNCIAS", modifier = Modifier.padding(horizontal = 28.dp, vertical = 12.dp), style = MaterialTheme.typography.labelSmall, color = MetaGray4, fontWeight = FontWeight.Bold)
 
-                        SwiftSettingsSection {
-                            SwiftSettingsSwitchItem(icon = Icons.Default.DarkMode, iconColor = Color.Black, title = "Modo Escuro", checked = isDarkMode, onCheckedChange = { isDarkMode = it })
-                            SwiftSettingsDivider()
-                            SwiftSettingsSwitchItem(icon = Icons.Default.Visibility, iconColor = AppleBlue, title = "Visto por último", checked = readReceiptsEnabled, onCheckedChange = {
+                        MetaSettingsSection {
+                            MetaSettingsSwitchItem(icon = Icons.Default.DarkMode, iconColor = Color.Black, title = "Modo escuro", checked = isDarkMode, onCheckedChange = { isDarkMode = it })
+                            MetaSettingsDivider()
+                            MetaSettingsSwitchItem(icon = Icons.Default.Visibility, iconColor = MessengerBlue, title = "Status online", checked = readReceiptsEnabled, onCheckedChange = {
                                 readReceiptsEnabled = it
                                 privacyPrefs.edit().putBoolean("read_receipts_enabled", it).apply()
+                                viewModel.updatePresence(it)
                             })
                         }
 
-                        SwiftSettingsSection {
-                            SwiftSettingsSwitchItem(icon = Icons.Default.Lock, iconColor = SystemGray, title = "Bloqueio com PIN", checked = isPinEnabled, onCheckedChange = {
+                        Text("SEGURANÇA", modifier = Modifier.padding(horizontal = 28.dp, vertical = 12.dp), style = MaterialTheme.typography.labelSmall, color = MetaGray4, fontWeight = FontWeight.Bold)
+
+                        MetaSettingsSection {
+                            MetaSettingsSwitchItem(icon = Icons.Default.Lock, iconColor = MetaGray4, title = "Bloqueio com PIN", checked = isPinEnabled, onCheckedChange = {
                                 if (it) showPinDialog = true else {
                                     isPinEnabled = false
                                     securityPrefs.edit().putBoolean("pin_enabled", false).apply()
                                 }
                             })
                             if (isPinEnabled) {
-                                SwiftSettingsDivider()
-                                SwiftSettingsItem(title = "Usar Biometria", icon = Icons.Default.Fingerprint, iconColor = ApplePink, trailing = {
+                                MetaSettingsDivider()
+                                MetaSettingsItem(title = "Usar Biometria", icon = Icons.Default.Fingerprint, iconColor = InstagramPink, trailing = {
                                     Switch(checked = isBiometricEnabled, onCheckedChange = {
                                         isBiometricEnabled = it
                                         securityPrefs.edit().putBoolean("biometric_enabled", it).apply()
-                                    }, colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = AppleGreen))
+                                    }, colors = SwitchDefaults.colors(checkedTrackColor = MessengerBlue))
                                 })
                             }
                         }
 
-                        SwiftSettingsSection {
-                            SwiftSettingsItem(title = "Sair da conta", icon = Icons.AutoMirrored.Filled.Logout, iconColor = SystemGray, onClick = {
+                        MetaSettingsSection {
+                            MetaSettingsItem(title = "Sair da conta", icon = Icons.AutoMirrored.Filled.Logout, iconColor = MetaGray4, onClick = {
                                 viewModel.logout()
+                                val intent = Intent(context, MainActivity::class.java).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                                }
+                                context.startActivity(intent)
                                 finish()
                             })
-                            SwiftSettingsDivider()
-                            SwiftSettingsItem(title = "Excluir Conta", icon = Icons.Default.DeleteForever, iconColor = AppleRed, textColor = AppleRed, onClick = { showDeleteAccountDialog = true })
+                            MetaSettingsDivider()
+                            MetaSettingsItem(title = "Excluir conta", icon = Icons.Default.DeleteForever, iconColor = Color(0xFFFA3E3E), textColor = Color(0xFFFA3E3E), onClick = { showDeleteAccountDialog = true })
                         }
                         Spacer(Modifier.height(40.dp))
                     }
                 }
 
                 if (showDeleteAccountDialog) {
-                    AlertDialog(onDismissRequest = { showDeleteAccountDialog = false }, title = { Text("Excluir Conta") }, text = { Text("Esta ação é permanente.") },
-                        confirmButton = { TextButton(onClick = { viewModel.deleteAccount { _, _ -> finish() } }) { Text("Excluir", color = AppleRed) } },
+                    AlertDialog(onDismissRequest = { showDeleteAccountDialog = false }, title = { Text("Excluir conta?") }, text = { Text("Esta ação não pode ser desfeita.") },
+                        confirmButton = { TextButton(onClick = { viewModel.deleteAccount { _, _ -> finish() } }) { Text("Excluir", color = Color(0xFFFA3E3E)) } },
                         dismissButton = { TextButton(onClick = { showDeleteAccountDialog = false }) { Text("Cancelar") } }
                     )
                 }
@@ -189,38 +250,38 @@ class SettingsActivity : ComponentActivity() {
 }
 
 @Composable
-fun SwiftSettingsSection(content: @Composable ColumnScope.() -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), elevation = CardDefaults.cardElevation(0.dp)) {
+fun MetaSettingsSection(content: @Composable ColumnScope.() -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), elevation = CardDefaults.cardElevation(0.dp)) {
         Column(modifier = Modifier.fillMaxWidth()) { content() }
     }
 }
 
 @Composable
-fun SwiftSettingsItem(title: String, icon: ImageVector? = null, iconColor: Color = AppleBlue, textColor: Color = Color.Unspecified, trailing: @Composable (() -> Unit)? = null, onClick: (() -> Unit)? = null) {
+fun MetaSettingsItem(title: String, icon: ImageVector? = null, iconColor: Color = MessengerBlue, textColor: Color = Color.Unspecified, trailing: @Composable (() -> Unit)? = null, onClick: (() -> Unit)? = null) {
     Row(modifier = Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable { onClick() } else Modifier).padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         if (icon != null) {
-            Box(modifier = Modifier.size(28.dp).clip(RoundedCornerShape(6.dp)).background(iconColor), contentAlignment = Alignment.Center) { Icon(icon, null, tint = Color.White, modifier = Modifier.size(18.dp)) }
+            Box(modifier = Modifier.size(32.dp).clip(CircleShape).background(iconColor), contentAlignment = Alignment.Center) { Icon(icon, null, tint = Color.White, modifier = Modifier.size(18.dp)) }
             Spacer(Modifier.width(12.dp))
         }
-        Text(title, style = MaterialTheme.typography.bodyLarge, color = textColor, modifier = Modifier.weight(1f))
-        if (trailing != null) trailing() else if (onClick != null) Icon(Icons.Default.ChevronRight, null, tint = SystemGray3, modifier = Modifier.size(20.dp))
+        Text(title, style = MaterialTheme.typography.bodyLarge, color = if (textColor == Color.Unspecified) MaterialTheme.colorScheme.onSurface else textColor, modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium)
+        if (trailing != null) trailing() else if (onClick != null) Icon(Icons.Default.ChevronRight, null, tint = MetaGray3, modifier = Modifier.size(20.dp))
     }
 }
 
 @Composable
-fun SwiftSettingsSwitchItem(icon: ImageVector, iconColor: Color, title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    SwiftSettingsItem(title = title, icon = icon, iconColor = iconColor, trailing = { Switch(checked = checked, onCheckedChange = onCheckedChange, colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = AppleGreen)) })
+fun MetaSettingsSwitchItem(icon: ImageVector, iconColor: Color, title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    MetaSettingsItem(title = title, icon = icon, iconColor = iconColor, trailing = { Switch(checked = checked, onCheckedChange = onCheckedChange, colors = SwitchDefaults.colors(checkedTrackColor = MessengerBlue)) })
 }
 
 @Composable
-fun SwiftSettingsTextField(label: String, value: String, onValueChange: (String) -> Unit) {
-    Row(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.width(80.dp))
-        TextField(value = value, onValueChange = onValueChange, modifier = Modifier.weight(1f), colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent), singleLine = true)
+fun MetaSettingsTextField(label: String, value: String, onValueChange: (String) -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.width(80.dp), fontWeight = FontWeight.Medium)
+        TextField(value = value, onValueChange = onValueChange, modifier = Modifier.weight(1f), colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, focusedTextColor = MaterialTheme.colorScheme.onSurface, unfocusedTextColor = MaterialTheme.colorScheme.onSurface), singleLine = true, textStyle = MaterialTheme.typography.bodyLarge)
     }
 }
 
 @Composable
-fun SwiftSettingsDivider() {
-    HorizontalDivider(modifier = Modifier.padding(start = 56.dp), thickness = 0.5.dp, color = SystemGray5)
+fun MetaSettingsDivider() {
+    HorizontalDivider(modifier = Modifier.padding(start = 60.dp), thickness = 0.5.dp, color = LocalChatColors.current.separator)
 }

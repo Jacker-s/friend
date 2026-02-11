@@ -12,7 +12,7 @@ android {
         applicationId = "com.jack.friend"
         minSdk = 24
         targetSdk = 35
-        versionCode = 2
+        versionCode = 4
         versionName = "1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -75,6 +75,9 @@ dependencies {
     implementation(libs.firebase.auth)
     implementation(libs.firebase.storage)
     implementation(libs.firebase.messaging)
+
+    // Cloudinary
+    implementation(libs.cloudinary.android)
 
     // Image Loading
     implementation(libs.coil.compose)

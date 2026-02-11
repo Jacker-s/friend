@@ -10,6 +10,9 @@ class WebRTCManager(
     private val context: Context,
     private val roomId: String,
     private val isCaller: Boolean,
+    private val isVideo: Boolean,
+    private val localVideoView: SurfaceViewRenderer? = null,
+    private val remoteVideoView: SurfaceViewRenderer? = null,
     private val onLocalStream: () -> Unit,
     private val onRemoteStream: () -> Unit
 ) {
@@ -17,22 +20,30 @@ class WebRTCManager(
     private var peerConnectionFactory: PeerConnectionFactory? = null
     private var peerConnection: PeerConnection? = null
     private var localAudioTrack: AudioTrack? = null
+    private var localVideoTrack: VideoTrack? = null
+    private var videoCapturer: VideoCapturer? = null
     private var audioDeviceModule: JavaAudioDeviceModule? = null
+    private var eglBaseContext: EglBase.Context = EglBase.create().eglBaseContext
 
     private val localCandidatesPath = if (isCaller) "callerCandidates" else "receiverCandidates"
     private val remoteCandidatesPath = if (isCaller) "receiverCandidates" else "callerCandidates"
     private val pendingIceCandidates = mutableListOf<IceCandidate>()
+
+    companion object {
+        fun initialize(context: Context) {
+            val options = PeerConnectionFactory.InitializationOptions.builder(context)
+                .createInitializationOptions()
+            PeerConnectionFactory.initialize(options)
+        }
+    }
 
     init {
         initPeerConnectionFactory()
     }
 
     private fun initPeerConnectionFactory() {
-        val options = PeerConnectionFactory.InitializationOptions.builder(context)
-            .createInitializationOptions()
-        PeerConnectionFactory.initialize(options)
+        initialize(context)
 
-        // Configuração robusta de áudio para Android
         audioDeviceModule = JavaAudioDeviceModule.builder(context)
             .setUseHardwareAcousticEchoCanceler(true)
             .setUseHardwareNoiseSuppressor(true)
@@ -41,6 +52,8 @@ class WebRTCManager(
 
         peerConnectionFactory = PeerConnectionFactory.builder()
             .setAudioDeviceModule(audioDeviceModule)
+            .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBaseContext))
+            .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglBaseContext, true, true))
             .setOptions(PeerConnectionFactory.Options())
             .createPeerConnectionFactory()
     }
@@ -51,7 +64,7 @@ class WebRTCManager(
         
         val constraints = MediaConstraints().apply {
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", if (isVideo) "true" else "false"))
         }
         
         peerConnection?.createOffer(object : SimpleSdpObserver() {
@@ -85,7 +98,7 @@ class WebRTCManager(
                             drainIceCandidates()
                             val constraints = MediaConstraints().apply {
                                 mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-                                mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+                                mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", if (isVideo) "true" else "false"))
                             }
                             peerConnection?.createAnswer(object : SimpleSdpObserver() {
                                 override fun onCreateSuccess(answerDescription: SessionDescription?) {
@@ -110,17 +123,46 @@ class WebRTCManager(
         val audioSource = peerConnectionFactory?.createAudioSource(MediaConstraints())
         localAudioTrack = peerConnectionFactory?.createAudioTrack("ARDAMSa0", audioSource)
         localAudioTrack?.setEnabled(true)
-        
-        // Adicionar track ao peerConnection
         peerConnection?.addTrack(localAudioTrack)
+
+        if (isVideo && localVideoView != null) {
+            videoCapturer = createVideoCapturer()
+            val videoSource = peerConnectionFactory?.createVideoSource(false)
+            val surfaceTextureHelper = SurfaceTextureHelper.create("CaptureThread", eglBaseContext)
+            videoCapturer?.initialize(surfaceTextureHelper, context, videoSource?.capturerObserver)
+            videoCapturer?.startCapture(1280, 720, 30)
+
+            localVideoTrack = peerConnectionFactory?.createVideoTrack("ARDAMSv0", videoSource)
+            localVideoTrack?.setEnabled(true)
+            localVideoTrack?.addSink(localVideoView)
+            peerConnection?.addTrack(localVideoTrack)
+        }
+        
         onLocalStream()
+    }
+
+    private fun createVideoCapturer(): VideoCapturer? {
+        val enumerator = Camera2Enumerator(context)
+        val deviceNames = enumerator.deviceNames
+        for (deviceName in deviceNames) {
+            if (enumerator.isFrontFacing(deviceName)) {
+                val capturer = enumerator.createCapturer(deviceName, null)
+                if (capturer != null) return capturer
+            }
+        }
+        for (deviceName in deviceNames) {
+            if (!enumerator.isFrontFacing(deviceName)) {
+                val capturer = enumerator.createCapturer(deviceName, null)
+                if (capturer != null) return capturer
+            }
+        }
+        return null
     }
 
     private fun createPeerConnection() {
         val iceServers = listOf(
             PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
             PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer(),
-            // Turn servers ajudam em conexões 4G/Redes restritas
             PeerConnection.IceServer.builder("turn:openrelay.metered.ca:80")
                 .setUsername("openrelayproject")
                 .setPassword("openrelayproject")
@@ -144,14 +186,16 @@ class WebRTCManager(
             }
             
             override fun onTrack(transceiver: RtpTransceiver?) {
-                if (transceiver?.receiver?.track()?.kind() == "audio") {
-                    Log.d("WebRTC", "Remote audio track received")
+                val track = transceiver?.receiver?.track()
+                if (track?.kind() == "audio") {
+                    onRemoteStream()
+                } else if (track?.kind() == "video" && remoteVideoView != null) {
+                    (track as VideoTrack).addSink(remoteVideoView)
                     onRemoteStream()
                 }
             }
             
             override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {
-                Log.d("WebRTC", "ICE Connection State: $state")
                 if (state == PeerConnection.IceConnectionState.CONNECTED) {
                     database.child("status").setValue("CONNECTED")
                 }
@@ -176,7 +220,6 @@ class WebRTCManager(
                 if (type != null && sdp != null && peerConnection?.signalingState() == PeerConnection.SignalingState.HAVE_LOCAL_OFFER) {
                     peerConnection?.setRemoteDescription(object : SimpleSdpObserver() {
                         override fun onSetSuccess() {
-                            Log.d("WebRTC", "Remote Answer set")
                             drainIceCandidates()
                         }
                     }, SessionDescription(SessionDescription.Type.fromCanonicalForm(type), sdp))
@@ -218,7 +261,15 @@ class WebRTCManager(
         return !isMuted
     }
 
+    fun toggleVideo(isOn: Boolean) {
+        localVideoTrack?.setEnabled(isOn)
+    }
+
     fun onDestroy() {
+        try {
+            videoCapturer?.stopCapture()
+            videoCapturer?.dispose()
+        } catch (e: Exception) {}
         peerConnection?.dispose()
         peerConnectionFactory?.dispose()
         audioDeviceModule?.release()

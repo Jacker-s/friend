@@ -20,12 +20,10 @@ class MessagingService : Service() {
     private val auth = FirebaseAuth.getInstance()
     private var callNotificationListener: ValueEventListener? = null
     private var myUsername: String? = null
-    
-    // Lista de listeners ativos para limpar notificações de chamadas encerradas
-    private val activeCallListeners = mutableMapOf<String, ValueEventListener>()
 
     companion object {
-        private const val CALL_CHANNEL_ID = "CALL_CHANNEL_V7"
+        private const val CALL_CHANNEL_ID = "CALL_CHANNEL_V8"
+        private const val MSG_CHANNEL_ID = "MESSAGE_CHANNEL_V1"
         private const val SILENT_CHANNEL_ID = "silent_service_channel"
         private const val FOREGROUND_ID = 1001
         private const val CALL_NOTIF_ID = 1002
@@ -36,72 +34,99 @@ class MessagingService : Service() {
         super.onCreate()
         createNotificationChannels()
         startSilentForeground()
-        
-        val user = auth.currentUser
-        if (user != null) {
-            setupUserListener(user.uid)
-        }
+        auth.currentUser?.let { setupUserListener(it.uid) }
     }
 
     private fun startSilentForeground() {
         val notification = NotificationCompat.Builder(this, SILENT_CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("Friend")
-            .setContentText("Ligado para receber chamadas")
-            .setPriority(NotificationCompat.PRIORITY_MIN)
-            .build()
-        
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(FOREGROUND_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)
-        } else {
-            startForeground(FOREGROUND_ID, notification)
-        }
+            .setSmallIcon(R.mipmap.ic_launcher).setContentTitle("Friend").setContentText("Ativo para chamadas e mensagens").setPriority(NotificationCompat.PRIORITY_MIN).build()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) startForeground(FOREGROUND_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)
+        else startForeground(FOREGROUND_ID, notification)
     }
 
     private fun setupUserListener(uid: String) {
         database.child("uid_to_username").child(uid).get().addOnSuccessListener { snapshot ->
-            val username = snapshot.getValue(String::class.java) ?: return@addOnSuccessListener
-            myUsername = username
-            listenForCallSignals(username)
+            myUsername = snapshot.getValue(String::class.java)
+            myUsername?.let { 
+                listenForCallSignals(it)
+                listenForNewMessages(it)
+            }
         }
+    }
+
+    private fun listenForNewMessages(username: String) {
+        database.child("chats").child(username).addChildEventListener(object : ChildEventListener {
+            override fun onChildAdded(snapshot: DataSnapshot, previousChildName: String?) {
+                handleMessageSnapshot(snapshot, username)
+            }
+
+            override fun onChildChanged(snapshot: DataSnapshot, previousChildName: String?) {
+                handleMessageSnapshot(snapshot, username)
+            }
+
+            override fun onChildRemoved(snapshot: DataSnapshot) {}
+            override fun onChildMoved(snapshot: DataSnapshot, previousChildName: String?) {}
+            override fun onCancelled(error: DatabaseError) {}
+        })
+    }
+
+    private fun handleMessageSnapshot(snapshot: DataSnapshot, username: String) {
+        val summary = snapshot.getValue(ChatSummary::class.java) ?: return
+        
+        // SÓ MOSTRA NOTIFICAÇÃO SE o app estiver em BACKGROUND
+        // Se o app estiver aberto (isAppInForeground == true), não mostramos nada, 
+        // pois a lista de conversas e o chat já se atualizam sozinhos.
+        if (!FriendApplication.isAppInForeground) {
+            if (summary.hasUnread && summary.lastSenderId != username) {
+                showNewMessageNotification(summary)
+            }
+        }
+    }
+
+    private fun showNewMessageNotification(summary: ChatSummary) {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        }
+        val pendingIntent = PendingIntent.getActivity(this, summary.friendId.hashCode(), intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+
+        val builder = NotificationCompat.Builder(this, MSG_CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(summary.friendName ?: summary.friendId)
+            .setContentText(summary.lastMessage)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))
+
+        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(summary.friendId.hashCode(), builder.build())
     }
 
     private fun listenForCallSignals(username: String) {
         val signalsRef = database.child("call_notifications").child(username)
-        
         callNotificationListener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                try {
-                    val m = snapshot.getValue(Message::class.java) ?: return
-                    
-                    if (m.isCall && m.callStatus == "STARTING") {
-                        showIncomingCall(m)
-                        // Limpa o sinal para não disparar novamente
-                        signalsRef.removeValue()
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Erro ao processar sinal de chamada: ${e.message}")
+                val m = snapshot.getValue(Message::class.java) ?: return
+                if (m.isCall && m.callStatus == "STARTING") {
+                    showIncomingCall(m)
+                    signalsRef.removeValue()
                 }
             }
             override fun onCancelled(error: DatabaseError) {}
         }
-        
         signalsRef.addValueEventListener(callNotificationListener!!)
     }
 
     private fun showIncomingCall(message: Message) {
-        val roomId = message.callRoomId ?: return
-        
         val intent = Intent(this, IncomingCallActivity::class.java).apply {
             putExtra("callMessage", message)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
         
-        val fullScreenPendingIntent = PendingIntent.getActivity(
-            this, message.id.hashCode(), intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        startActivity(intent)
 
+        val fullScreenPendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val builder = NotificationCompat.Builder(this, CALL_CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("Chamada de ${message.senderName ?: message.senderId}")
@@ -109,42 +134,26 @@ class MessagingService : Service() {
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setFullScreenIntent(fullScreenPendingIntent, true)
+            .setAutoCancel(true)
             .setOngoing(true)
-            .setAutoCancel(false)
             .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))
 
-        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(CALL_NOTIF_ID, builder.build())
-        
-        // Monitorar o status da chamada para remover a notificação se for encerrada
-        monitorCallStatus(roomId)
-        
-        try { startActivity(intent) } catch (e: Exception) {
-            Log.e(TAG, "Erro ao iniciar IncomingCallActivity: ${e.message}")
-        }
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(CALL_NOTIF_ID, builder.build())
+        message.callRoomId?.let { monitorCallStatus(it) }
     }
 
     private fun monitorCallStatus(roomId: String) {
-        // Evita duplicar listeners para a mesma sala
-        if (activeCallListeners.containsKey(roomId)) return
-
         val callRef = database.child("calls").child(roomId)
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 val status = snapshot.child("status").getValue(String::class.java)
                 if (status == "ENDED" || status == "REJECTED" || status == "CONNECTED") {
-                    val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-                    nm.cancel(CALL_NOTIF_ID)
-                    
-                    // Remover listener após o encerramento
+                    (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).cancel(CALL_NOTIF_ID)
                     callRef.removeEventListener(this)
-                    activeCallListeners.remove(roomId)
                 }
             }
             override fun onCancelled(error: DatabaseError) {}
         }
-        
-        activeCallListeners[roomId] = listener
         callRef.addValueEventListener(listener)
     }
 
@@ -152,33 +161,26 @@ class MessagingService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
             
-            val callChannel = NotificationChannel(CALL_CHANNEL_ID, "Chamadas", NotificationManager.IMPORTANCE_HIGH).apply {
-                val attrs = AudioAttributes.Builder()
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-                    .build()
-                setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE), attrs)
+            // Canal de Chamadas
+            nm.createNotificationChannel(NotificationChannel(CALL_CHANNEL_ID, "Chamadas", NotificationManager.IMPORTANCE_HIGH).apply {
+                setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE), AudioAttributes.Builder().setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE).build())
+            })
+            
+            // Canal de Mensagens
+            nm.createNotificationChannel(NotificationChannel(MSG_CHANNEL_ID, "Mensagens", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Notificações de novas mensagens de chat"
                 enableVibration(true)
-            }
+            })
             
-            val silentChannel = NotificationChannel(SILENT_CHANNEL_ID, "Serviço", NotificationManager.IMPORTANCE_MIN)
-            
-            nm.createNotificationChannel(callChannel)
-            nm.createNotificationChannel(silentChannel)
+            // Canal Silencioso (Foreground Service)
+            nm.createNotificationChannel(NotificationChannel(SILENT_CHANNEL_ID, "Serviço", NotificationManager.IMPORTANCE_MIN))
         }
     }
 
     override fun onDestroy() {
-        // Limpar todos os listeners ativos
-        myUsername?.let { username ->
-            callNotificationListener?.let {
-                database.child("call_notifications").child(username).removeEventListener(it)
-            }
+        myUsername?.let { 
+            database.child("call_notifications").child(it).removeEventListener(callNotificationListener!!) 
         }
-        activeCallListeners.forEach { (roomId, listener) ->
-            database.child("calls").child(roomId).removeEventListener(listener)
-        }
-        activeCallListeners.clear()
         super.onDestroy()
     }
 

@@ -13,5 +13,6 @@ data class UserProfile(
     @set:PropertyName("isOnline")
     var isOnline: Boolean = false,
     var lastActive: Long = 0L,
-    var status: String = "Olá! Estou usando o Friend."
+    var status: String = "Olá! Estou usando o Friend.",
+    var presenceStatus: String = "Online" // Online, Ocupado, Ausente, Invisível
 )
