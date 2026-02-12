@@ -349,11 +349,13 @@ fun ChatScreen(viewModel: ChatViewModel = viewModel()) {
                             if (targetId.isNotEmpty()) {
                                 if (targetGroup == null) {
                                     IconButton(onClick = {
-                                        viewModel.startCall(isVideo = false, isGroup = false)
-                                        val callKey = "WapiCall_Private_${if (myUsername < targetId) "${myUsername.lowercase()}_${targetId.lowercase()}" else "${targetId.lowercase()}_${myUsername.lowercase()}"}"
+                                        val uniqueRoomId = "Call_${UUID.randomUUID().toString().take(8)}"
+                                        viewModel.startCall(isVideo = false, isGroup = false, uniqueRoomId)
+                                        val currentChat = activeChats.find { it.friendId == targetId }
                                         context.startActivity(Intent(context, CallActivity::class.java).apply { 
-                                            putExtra("roomId", callKey)
+                                            putExtra("roomId", uniqueRoomId)
                                             putExtra("targetId", targetId)
+                                            putExtra("targetPhotoUrl", targetProfile?.photoUrl ?: currentChat?.friendPhotoUrl)
                                             putExtra("isOutgoing", true)
                                             putExtra("isVideo", false)
                                         })

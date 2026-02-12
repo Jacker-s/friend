@@ -126,6 +126,7 @@ class IncomingCallActivity : ComponentActivity() {
         val intent = Intent(this, CallActivity::class.java).apply {
             putExtra("roomId", message.callRoomId)
             putExtra("targetId", message.senderId)
+            putExtra("targetPhotoUrl", message.senderPhotoUrl)
             putExtra("isOutgoing", false)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
@@ -171,12 +172,18 @@ fun IncomingCallScreen(callerName: String, callerPhotoUrl: String?, onAccept: ()
         Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.SpaceBetween) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(top = 120.dp)) {
                 Box(contentAlignment = Alignment.Center) {
-                    AsyncImage(
-                        model = callerPhotoUrl,
-                        contentDescription = null,
-                        modifier = Modifier.size(120.dp).clip(CircleShape).background(Color(0xFF1C1C1E)),
-                        contentScale = ContentScale.Crop
-                    )
+                    if (callerPhotoUrl != null) {
+                        AsyncImage(
+                            model = callerPhotoUrl,
+                            contentDescription = null,
+                            modifier = Modifier.size(120.dp).clip(CircleShape).background(Color(0xFF1C1C1E)),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Box(modifier = Modifier.size(120.dp).clip(CircleShape).background(Color(0xFF1C1C1E)), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.Person, null, modifier = Modifier.size(60.dp), tint = Color.Gray)
+                        }
+                    }
                 }
                 Spacer(Modifier.height(24.dp))
                 Text(callerName, color = Color.White, style = MaterialTheme.typography.displayLarge, fontWeight = FontWeight.Bold)

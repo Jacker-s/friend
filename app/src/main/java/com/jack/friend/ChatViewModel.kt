@@ -964,13 +964,13 @@ class ChatViewModel : ViewModel() {
         }
     }
 
-    fun startCall(isVideo: Boolean, isGroup: Boolean) {
+    fun startCall(isVideo: Boolean, isGroup: Boolean, customRoomId: String) {
         val me = _myUsername.value
         val target = _targetId.value
         if (me.isEmpty() || target.isEmpty()) return
         if (!isGroup && _blockedUsers.value.contains(target)) return
 
-        val roomId = "WapiCall_Private_${if (me.lowercase() < target.lowercase()) "${me.lowercase()}_${target.lowercase()}" else "${target.lowercase()}_${me.lowercase()}"}"
+        val roomId = customRoomId
         
         val callData = mapOf(
             "callerId" to me,
@@ -991,6 +991,7 @@ class ChatViewModel : ViewModel() {
             timestamp = System.currentTimeMillis(),
             isGroup = isGroup,
             senderName = _myName.value,
+            senderPhotoUrl = _myPhotoUrl.value,
             callRoomId = roomId,
             callType = if (isVideo) "VIDEO" else "AUDIO",
             callStatus = "STARTING",

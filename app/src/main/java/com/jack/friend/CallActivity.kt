@@ -2,11 +2,13 @@ package com.jack.friend
 
 import android.Manifest
 import android.app.NotificationManager
+import android.content.Context
 import android.content.pm.PackageManager
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
-import android.view.ViewGroup
-import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -15,6 +17,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -24,12 +27,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import coil.compose.AsyncImage
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
@@ -44,6 +48,7 @@ class CallActivity : ComponentActivity() {
     private val database = FirebaseDatabase.getInstance().reference
     private var roomId: String = ""
     private var targetId: String = ""
+    private var targetPhotoUrl: String? = null
     private var isOutgoing: Boolean = false
     private var isVideo: Boolean = false
     private val callStatusState = mutableStateOf("RINGING")
@@ -56,14 +61,20 @@ class CallActivity : ComponentActivity() {
     private var remoteVideoView: SurfaceViewRenderer? = null
     private val eglBase = EglBase.create()
 
+    private lateinit var audioManager: AudioManager
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
         
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).cancel(1002)
         
         roomId = intent.getStringExtra("roomId") ?: ""
         targetId = intent.getStringExtra("targetId") ?: ""
+        targetPhotoUrl = intent.getStringExtra("targetPhotoUrl")
         isOutgoing = intent.getBooleanExtra("isOutgoing", false)
         isVideo = intent.getBooleanExtra("isVideo", false)
 
@@ -79,6 +90,9 @@ class CallActivity : ComponentActivity() {
                 init(eglBase.eglBaseContext, null)
                 setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
             }
+            setSpeakerphoneOn(true)
+        } else {
+            setSpeakerphoneOn(false)
         }
 
         checkPermissions()
@@ -87,13 +101,15 @@ class CallActivity : ComponentActivity() {
             FriendTheme {
                 MetaCallScreen(
                     targetId = targetId,
+                    targetPhotoUrl = targetPhotoUrl,
                     isOutgoing = isOutgoing,
                     isVideo = isVideo,
                     status = callStatusState.value,
                     localVideoView = localVideoView,
                     remoteVideoView = remoteVideoView,
                     onHangUp = { endCall() },
-                    onMute = { toggleMute() },
+                    onMute = { muted -> toggleMute(muted) },
+                    onSpeakerToggle = { speakerOn -> setSpeakerphoneOn(speakerOn) },
                     onCameraToggle = { toggleCamera() }
                 )
             }
@@ -133,13 +149,29 @@ class CallActivity : ComponentActivity() {
         if (toRequest.isNotEmpty()) ActivityCompat.requestPermissions(this, toRequest.toTypedArray(), 101)
     }
     
-    private fun toggleMute() {
-        val isCurrentlyMuted = callStatusState.value == "MUTED"
-        webRTCManager?.toggleMute(!isCurrentlyMuted)
+    private fun toggleMute(isMuted: Boolean) {
+        webRTCManager?.toggleMute(isMuted)
+    }
+
+    private fun setSpeakerphoneOn(on: Boolean) {
+        audioManager.isSpeakerphoneOn = on
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val devices = audioManager.availableCommunicationDevices
+            val speakerDevice = devices.find { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+            val earpieceDevice = devices.find { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
+            
+            if (on && speakerDevice != null) {
+                audioManager.setCommunicationDevice(speakerDevice)
+            } else if (!on && earpieceDevice != null) {
+                audioManager.setCommunicationDevice(earpieceDevice)
+            } else {
+                audioManager.clearCommunicationDevice()
+            }
+        }
     }
 
     private fun toggleCamera() {
-        // Simple toggle for now
+        webRTCManager?.toggleVideo(isVideo)
     }
 
     private fun listenForCallStatus() {
@@ -169,6 +201,13 @@ class CallActivity : ComponentActivity() {
     private fun cleanupAndFinish() {
         if (isEnding) return
         isEnding = true
+        
+        audioManager.mode = AudioManager.MODE_NORMAL
+        audioManager.isSpeakerphoneOn = false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            audioManager.clearCommunicationDevice()
+        }
+
         activityScope.cancel()
         roomId.takeIf { it.isNotEmpty() }?.let { id ->
             callStatusListener?.let { database.child("calls").child(id).removeEventListener(it) }
@@ -192,27 +231,28 @@ class CallActivity : ComponentActivity() {
 @Composable
 fun MetaCallScreen(
     targetId: String, 
+    targetPhotoUrl: String?,
     isOutgoing: Boolean, 
     isVideo: Boolean,
     status: String,
     localVideoView: SurfaceViewRenderer?,
     remoteVideoView: SurfaceViewRenderer?,
     onHangUp: () -> Unit, 
-    onMute: () -> Unit,
+    onMute: (Boolean) -> Unit,
+    onSpeakerToggle: (Boolean) -> Unit,
     onCameraToggle: () -> Unit
 ) {
     var isMuted by remember { mutableStateOf(false) }
+    var isSpeakerOn by remember { mutableStateOf(isVideo) }
     var isCameraOff by remember { mutableStateOf(!isVideo) }
     
     Box(modifier = Modifier.fillMaxSize().background(MetaBlack)) {
         if (isVideo && status == "CONNECTED") {
-            // Remote Video Fullscreen
             AndroidView(
                 factory = { remoteVideoView!! },
                 modifier = Modifier.fillMaxSize()
             )
             
-            // Local Video Preview (Small)
             if (!isCameraOff) {
                 Box(
                     modifier = Modifier
@@ -232,15 +272,24 @@ fun MetaCallScreen(
             Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(MetaBlack, MetaDarkSurface, MetaBlack))))
             Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                 Box(modifier = Modifier.size(160.dp), contentAlignment = Alignment.Center) {
-                    Box(modifier = Modifier.size(160.dp).clip(CircleShape).background(MetaDarkSurface.copy(0.5f)))
-                    Icon(Icons.Default.Person, null, modifier = Modifier.size(80.dp), tint = MetaGray4)
+                    if (targetPhotoUrl != null) {
+                        AsyncImage(
+                            model = targetPhotoUrl,
+                            contentDescription = null,
+                            modifier = Modifier.size(160.dp).clip(CircleShape).background(MetaDarkSurface.copy(0.5f)),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Box(modifier = Modifier.size(160.dp).clip(CircleShape).background(MetaDarkSurface.copy(0.5f)))
+                        Icon(Icons.Default.Person, null, modifier = Modifier.size(80.dp), tint = MetaGray4)
+                    }
                 }
                 Spacer(Modifier.height(40.dp))
-                Text(targetId, color = Color.White, style = MaterialTheme.typography.displayLarge, fontWeight = FontWeight.Bold)
+                Text(targetId, color = Color.White, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(12.dp))
                 val statusText = when (status) {
                     "RINGING" -> if (isOutgoing) "Chamando..." else "Recebendo chamada..."
-                    "CONNECTED" -> if (isVideo) "Iniciando vídeo..." else "Chamada em andamento"
+                    "CONNECTED" -> "Chamada em andamento"
                     "MUTED" -> "Microfone silenciado"
                     else -> "Conectando..."
                 }
@@ -248,19 +297,24 @@ fun MetaCallScreen(
             }
         }
 
-        // Bottom Controls
         Surface(
             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 80.dp).padding(horizontal = 20.dp).fillMaxWidth(),
             shape = RoundedCornerShape(35.dp),
             color = MetaDarkSurface.copy(alpha = 0.8f)
         ) {
             Row(modifier = Modifier.padding(16.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { isMuted = !isMuted; onMute() }, modifier = Modifier.size(50.dp).clip(CircleShape).background(if (isMuted) Color.White else Color.Transparent)) {
+                IconButton(onClick = { 
+                    isMuted = !isMuted
+                    onMute(isMuted) 
+                }, modifier = Modifier.size(50.dp).clip(CircleShape).background(if (isMuted) Color.White else Color.Transparent)) {
                     Icon(if (isMuted) Icons.Default.MicOff else Icons.Default.Mic, null, tint = if (isMuted) Color.Black else Color.White, modifier = Modifier.size(24.dp))
                 }
                 
-                IconButton(onClick = { }, modifier = Modifier.size(50.dp).clip(CircleShape)) {
-                    Icon(Icons.AutoMirrored.Filled.VolumeUp, null, tint = Color.White, modifier = Modifier.size(24.dp))
+                IconButton(onClick = { 
+                    isSpeakerOn = !isSpeakerOn
+                    onSpeakerToggle(isSpeakerOn)
+                }, modifier = Modifier.size(50.dp).clip(CircleShape).background(if (isSpeakerOn) Color.White else Color.Transparent)) {
+                    Icon(if (isSpeakerOn) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff, null, tint = if (isSpeakerOn) Color.Black else Color.White, modifier = Modifier.size(24.dp))
                 }
 
                 if (isVideo) {
