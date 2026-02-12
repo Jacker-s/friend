@@ -983,6 +983,11 @@ class ChatViewModel : ViewModel() {
                 val ids = s.children.mapNotNull { it.key }
                 _blockedUsers.value = ids
                 
+                // Forçar atualização imediata das outras listas
+                listenToChats(username)
+                listenToContacts(username)
+                listenToStatuses(username)
+
                 viewModelScope.launch {
                     try {
                         val profiles = ids.mapNotNull { id ->
