@@ -106,19 +106,6 @@ class MainActivity : FragmentActivity() {
                 val correctPin = remember { prefs.getString("security_pin", "") ?: "" }
                 var isUnlocked by remember { mutableStateOf(!(isPinEnabled || isBiometricEnabled)) }
 
-                val lifecycleOwner = LocalLifecycleOwner.current
-                DisposableEffect(lifecycleOwner) {
-                    val observer = LifecycleEventObserver { _, event ->
-                        when (event) {
-                            Lifecycle.Event.ON_RESUME -> FriendApplication.isAppInForeground = true
-                            Lifecycle.Event.ON_PAUSE -> FriendApplication.isAppInForeground = false
-                            else -> {}
-                        }
-                    }
-                    lifecycleOwner.lifecycle.addObserver(observer)
-                    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-                }
-
                 LaunchedEffect(isUserLoggedIn) {
                     if (isUserLoggedIn) {
                         val serviceIntent = Intent(context, MessagingService::class.java)
@@ -383,12 +370,6 @@ fun ChatScreen(viewModel: ChatViewModel = viewModel()) {
     var selectedFilter by remember { mutableStateOf("Tudo") }
     
     var selectedChatForOptions by remember { mutableStateOf<ChatSummary?>(null) }
-
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_START) viewModel.updatePresence(true) else if (event == Lifecycle.Event.ON_STOP) viewModel.updatePresence(false) }
-        lifecycleOwner.lifecycle.addObserver(observer); onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
 
     LaunchedEffect(messages.size) { if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1) }
     LaunchedEffect(targetId) { 

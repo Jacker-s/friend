@@ -113,6 +113,9 @@ class ChatViewModel : ViewModel() {
     private var timerHandler = Handler(Looper.getMainLooper())
     private var timerRunnable: Runnable? = null
 
+    private var presenceJob: Job? = null
+    private var connectedListener: ValueEventListener? = null
+
     init {
         if (auth.currentUser != null) setupUserSession()
     }
@@ -149,24 +152,27 @@ class ChatViewModel : ViewModel() {
     }
 
     private fun setupPresence(username: String) {
+        // Cancelar listeners antigos se houver para evitar duplicidade
+        presenceJob?.cancel()
+        connectedListener?.let { db.child(".info/connected").removeEventListener(it) }
+
         val statusRef = db.child("users").child(username).child("isOnline")
-        db.child(".info/connected").addValueEventListener(object : ValueEventListener {
+        
+        connectedListener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 if (snapshot.getValue(Boolean::class.java) == true) {
+                    // Configurar onDisconnect para garantir que isOnline seja false ao fechar app bruscamente
                     statusRef.onDisconnect().setValue(false)
-                    updatePresence(FriendApplication.isAppInForeground)
+                    // Atualizar status baseado no estado atual do app
+                    updatePresence(FriendApplication.instance.isForeground.value)
                 }
             }
             override fun onCancelled(error: DatabaseError) {}
-        })
-        
-        viewModelScope.launch {
-            _myPresenceStatus.collect { 
-                updatePresence(FriendApplication.isAppInForeground)
-            }
         }
-
-        viewModelScope.launch {
+        db.child(".info/connected").addValueEventListener(connectedListener!!)
+        
+        presenceJob = viewModelScope.launch {
+            // Observar mudanças globais no foreground do app
             FriendApplication.instance.isForeground.collect { isForeground ->
                 updatePresence(isForeground)
             }
@@ -205,6 +211,9 @@ class ChatViewModel : ViewModel() {
             db.child("typing").child(path).child(friendId).removeEventListener(listener) 
         }
         typingListeners.clear()
+
+        connectedListener?.let { db.child(".info/connected").removeEventListener(it) }
+        presenceJob?.cancel()
     }
 
     fun setTargetId(id: String, isGroup: Boolean = false) {
@@ -589,6 +598,7 @@ class ChatViewModel : ViewModel() {
         val user = _myUsername.value
         if (user.isEmpty()) return
         val isVisible = _myPresenceStatus.value != "Invisível"
+        // Se o app não estiver visível (minimizado ou fechado), isOnline deve ser false obrigatoriamente.
         db.child("users").child(user).child("isOnline").setValue(online && isVisible)
     }
 
@@ -660,7 +670,7 @@ class ChatViewModel : ViewModel() {
                     } catch (e: Exception) {}
                 }
             }
-            override fun onCancelled(e: DatabaseError) {}
+            override fun onCancelled(error: DatabaseError) {}
         }
         db.child("contacts").child(username).addValueEventListener(contactsListener!!)
     }
@@ -885,7 +895,7 @@ class ChatViewModel : ViewModel() {
                 if (status != null) _myStatus.value = status
                 if (presenceStatus != null) {
                     _myPresenceStatus.value = presenceStatus
-                    updatePresence(FriendApplication.isAppInForeground)
+                    updatePresence(FriendApplication.instance.isForeground.value)
                 }
             } catch (e: Exception) {}
         }
