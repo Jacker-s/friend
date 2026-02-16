@@ -804,11 +804,11 @@ fun MetaUserItem(user: UserProfile, isContact: Boolean, onChatClick: () -> Unit,
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MetaMessageBubble(message: Message, isMe: Boolean, targetPhotoUrl: String?, isFirstInGroup: Boolean, isLastInGroup: Boolean, onImageClick: (String) -> Unit, onDelete: (String) -> Unit, onReply: () -> Unit, onReact: (String) -> Unit, onEdit: () -> Unit, onPin: () -> Unit) {
-    val isSingleEmoji = AnimatedEmojiHelper.isSingleEmoji(message.text) && 
-                       message.imageUrl == null && 
-                       message.audioUrl == null && 
+    val isSingleEmoji = AnimatedEmojiHelper.isSingleEmoji(message.text) &&
+                       message.imageUrl == null &&
+                       message.audioUrl == null &&
                        message.replyToId == null
-    
+
     val animUrl = if (isSingleEmoji) AnimatedEmojiHelper.getAnimUrl(message.text) else null
 
     val bubbleColor = if (isMe) MessengerBlue else LocalChatColors.current.bubbleOther
@@ -816,8 +816,8 @@ fun MetaMessageBubble(message: Message, isMe: Boolean, targetPhotoUrl: String?, 
     val view = LocalView.current
     val clipboardManager = LocalClipboardManager.current
     var showContext by remember { mutableStateOf(false) }
-    
-    val shape = if (isMe) RoundedCornerShape(topStart = 20.dp, topEnd = if (isFirstInGroup) 20.dp else 4.dp, bottomEnd = if (isLastInGroup) 20.dp else 4.dp, bottomStart = 20.dp) 
+
+    val shape = if (isMe) RoundedCornerShape(topStart = 20.dp, topEnd = if (isFirstInGroup) 20.dp else 4.dp, bottomEnd = if (isLastInGroup) 20.dp else 4.dp, bottomStart = 20.dp)
                 else RoundedCornerShape(topStart = if (isFirstInGroup) 20.dp else 4.dp, topEnd = 20.dp, bottomEnd = 20.dp, bottomStart = if (isLastInGroup) 20.dp else 4.dp)
 
     Row(modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp), horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start, verticalAlignment = Alignment.Bottom) {
@@ -827,23 +827,23 @@ fun MetaMessageBubble(message: Message, isMe: Boolean, targetPhotoUrl: String?, 
         }
         Column(horizontalAlignment = if (isMe) Alignment.End else Alignment.Start) {
             if (message.isGroup && !isMe && isFirstInGroup) Text(message.senderName ?: "", style = MaterialTheme.typography.labelSmall, color = MetaGray4, modifier = Modifier.padding(start = 12.dp, bottom = 2.dp))
-            
+
             if (isSingleEmoji) {
                 Box(modifier = Modifier.padding(8.dp)) {
                     if (animUrl != null) {
-                        AnimatedEmoji(emoji = message.text, modifier = Modifier.size(100.dp), onLongClick = { 
+                        AnimatedEmoji(emoji = message.text, modifier = Modifier.size(100.dp), onLongClick = {
                             view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                            showContext = true 
+                            showContext = true
                         })
                     } else {
                         Text(
-                            text = message.text, 
+                            text = message.text,
                             fontSize = 56.sp,
                             modifier = Modifier.combinedClickable(
                                 onClick = { showContext = true },
-                                onLongClick = { 
+                                onLongClick = {
                                     view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                                    showContext = true 
+                                    showContext = true
                                 }
                             )
                         )
