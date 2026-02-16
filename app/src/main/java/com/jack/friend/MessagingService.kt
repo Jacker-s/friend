@@ -25,7 +25,7 @@ class MessagingService : Service() {
     private var blockedUsers = mutableSetOf<String>()
 
     companion object {
-        private const val CALL_CHANNEL_ID = "CALL_CHANNEL_V14" 
+        private const val CALL_CHANNEL_ID = "CALL_CHANNEL_V14"
         private const val MSG_CHANNEL_ID = "MESSAGE_CHANNEL_V1"
         private const val SILENT_CHANNEL_ID = "silent_service_channel"
         private const val FOREGROUND_ID = 1001
@@ -50,7 +50,7 @@ class MessagingService : Service() {
     private fun setupUserListener(uid: String) {
         database.child("uid_to_username").child(uid).get().addOnSuccessListener { snapshot ->
             myUsername = snapshot.getValue(String::class.java)
-            myUsername?.let { 
+            myUsername?.let {
                 listenToBlockedUsers(it)
                 listenForCallSignals(it)
                 listenForNewMessages(it)
@@ -86,7 +86,7 @@ class MessagingService : Service() {
 
     private fun handleMessageSnapshot(snapshot: DataSnapshot, username: String) {
         val summary = snapshot.getValue(ChatSummary::class.java) ?: return
-        
+
         // Ignorar se o remetente estiver bloqueado
         if (blockedUsers.contains(summary.friendId)) return
 
@@ -122,7 +122,7 @@ class MessagingService : Service() {
         callNotificationListener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 val m = snapshot.getValue(Message::class.java) ?: return
-                
+
                 // Ignorar chamada se o autor estiver bloqueado
                 if (blockedUsers.contains(m.senderId)) {
                     signalsRef.removeValue()
@@ -144,7 +144,7 @@ class MessagingService : Service() {
             putExtra("callMessage", message)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
-        
+
         if (FriendApplication.isAppInForeground) {
             try {
                 startActivity(intent)
@@ -172,7 +172,7 @@ class MessagingService : Service() {
 
         val fullScreenPendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-        
+
         val builder = NotificationCompat.Builder(this, CALL_CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("Chamada de ${message.senderName ?: message.senderId}")
@@ -209,7 +209,7 @@ class MessagingService : Service() {
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-            
+
             val callChannel = NotificationChannel(CALL_CHANNEL_ID, "Chamadas", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "Notificações de chamadas recebidas"
                 val audioAttributes = AudioAttributes.Builder()
@@ -221,18 +221,18 @@ class MessagingService : Service() {
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
             nm.createNotificationChannel(callChannel)
-            
+
             nm.createNotificationChannel(NotificationChannel(MSG_CHANNEL_ID, "Mensagens", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "Notificações de novas mensagens de chat"
                 enableVibration(true)
             })
-            
+
             nm.createNotificationChannel(NotificationChannel(SILENT_CHANNEL_ID, "Serviço", NotificationManager.IMPORTANCE_MIN))
         }
     }
 
     override fun onDestroy() {
-        myUsername?.let { 
+        myUsername?.let {
             database.child("call_notifications").child(it).removeEventListener(callNotificationListener!!)
             blockedListener?.let { l -> database.child("blocks").child(it).removeEventListener(l) }
         }

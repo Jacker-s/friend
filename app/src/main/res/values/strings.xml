@@ -1,4 +1,110 @@
 <resources>
-    <string name="app_name">Wapi</string>
+    <string name="app_name">Wappi</string>
     <string name="default_web_client_id">135221802523-fl381le8p7cf5agsshqtps78cal57427.apps.googleusercontent.com</string>
+
+    <!-- Navigation & Tabs -->
+    <string name="tab_all">Tudo</string>
+    <string name="tab_groups">Grupos</string>
+    <string name="tab_unread">Não Lidas</string>
+    <string name="title_new_group">Novo Grupo</string>
+    <string name="title_contacts">Contatos</string>
+    <string name="title_chats">Conversas</string>
+
+    <!-- Chat Actions -->
+    <string name="action_clear_chat">Limpar conversa</string>
+    <string name="action_delete_group">Apagar Grupo</string>
+    <string name="action_delete_chat">Excluir conversa</string>
+    <string name="action_block">Bloquear</string>
+    <string name="action_unblock">Desbloquear</string>
+    <string name="action_open">Abrir</string>
+    <string name="action_cancel">Cancelar</string>
+    <string name="action_clear">Limpar</string>
+    <string name="action_delete">Apagar</string>
+    <string name="action_send">Enviar</string>
+
+    <!-- Dialogs -->
+    <string name="dialog_clear_chat_title">Limpar Conversa</string>
+    <string name="dialog_clear_chat_message">Isso apagará todas as mensagens para ambos.</string>
+    <string name="dialog_delete_group_title">Apagar Grupo</string>
+    <string name="dialog_delete_group_message">Isso excluirá o grupo e todas as mensagens para todos os membros.</string>
+    <string name="dialog_add_contact_title">Adicionar Contato</string>
+    <string name="dialog_add_contact_message">Digite o username exato do usuário:</string>
+    <string name="dialog_reset_password_title">Recuperar Senha</string>
+    <string name="dialog_reset_password_message">Enviaremos um link de redefinição para o seu e-mail.</string>
+
+    <!-- Status & Presence -->
+    <string name="status_typing">Digitando...</string>
+    <string name="status_online">Online</string>
+    <string name="status_busy">Ocupado</string>
+    <string name="status_away">Ausente</string>
+    <string name="status_invisible">Invisível</string>
+    <string name="status_offline">Offline</string>
+    <string name="status_members_count">%1$d membros</string>
+    <string name="status_my_status">Meu status</string>
+
+    <!-- Attachments -->
+    <string name="attachment_camera">Câmera</string>
+    <string name="attachment_gallery">Galeria</string>
+    <string name="attachment_image">📷 Imagem</string>
+    <string name="attachment_audio">🎤 Áudio</string>
+
+    <!-- Login & Auth -->
+    <string name="login_subtitle">Conecte-se com seus amigos</string>
+    <string name="signup_title">Crie sua conta agora</string>
+    <string name="label_username">Nome de usuário</string>
+    <string name="label_email">E-mail</string>
+    <string name="label_password">Senha</string>
+    <string name="label_photo">Foto</string>
+    <string name="action_forgot_password">Esqueceu a senha?</string>
+    <string name="action_login">Entrar</string>
+    <string name="action_signup">Criar Conta</string>
+    <string name="or_separator">OU</string>
+    <string name="switch_to_login">Já tem uma conta? Conectar</string>
+    <string name="switch_to_signup">Novo por aqui? Crie um perfil</string>
+    <string name="label_email_reset">E-mail de cadastro</string>
+    <string name="toast_link_sent">Link enviado!</string>
+    <string name="action_send_link">Enviar Link</string>
+
+    <!-- Security -->
+    <string name="security_lock_title">Bloqueio de Segurança</string>
+    <string name="security_lock_subtitle">Uma biometria para entrar</string>
+    <string name="security_use_pin">Usar PIN</string>
+    <string name="security_app_protected">App Protegido</string>
+
+    <!-- Chat UI -->
+    <string name="hint_search">Pesquisar</string>
+    <string name="hint_message">Mensagem...</string>
+    <string name="message_edited">editada</string>
+    <string name="message_pinned_header">Mensagem Fixada</string>
+    <string name="message_edit_header">Editar mensagem</string>
+    <string name="media_placeholder">Mídia</string>
+
+    <!-- Group Creation -->
+    <string name="group_name_hint">Nome do grupo</string>
+    <string name="group_members_count">Selecionar Membros (%1$d)</string>
+    <string name="group_create_button">Criar Grupo</string>
+
+    <!-- Audio Recording -->
+    <string name="audio_release_to_cancel">Solte para cancelar</string>
+    <string name="audio_slide_to_cancel">&lt; Deslize para cancelar</string>
+    <string name="audio_recording">Gravando...</string>
+
+    <!-- Date Formatting -->
+    <string name="date_today">HOJE</string>
+    <string name="date_yesterday">ONTEM</string>
+
+    <!-- Message Menu -->
+    <string name="menu_reply">Responder</string>
+    <string name="menu_edit">Editar</string>
+    <string name="menu_pin">Fixar</string>
+    <string name="menu_copy">Copiar</string>
+    <string name="menu_remove">Remover</string>
+
+    <!-- Miscellaneous -->
+    <string name="error_generic">Erro</string>
+    <string name="no_contacts">Nenhum contato adicionado</string>
+    <string name="viewers_count">Visto por %1$d pessoas</string>
+    <string name="viewers_label">Vistos</string>
+    <string name="temp_messages_label">Mensagens Temporárias (%1$s)</string>
+    <string name="temp_off">Off</string>
 </resources>

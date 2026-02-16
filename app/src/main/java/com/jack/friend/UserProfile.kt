@@ -14,5 +14,11 @@ data class UserProfile(
     var isOnline: Boolean = false,
     var lastActive: Long = 0L,
     var status: String = "Olá! Estou usando o Friend.",
-    var presenceStatus: String = "Online" // Online, Ocupado, Ausente, Invisível
+    var presenceStatus: String = "Online", // Online, Ocupado, Ausente, Invisível
+    
+    // Configurações de Privacidade
+    var showLastSeen: Boolean = true,
+    var showReadReceipts: Boolean = true,
+    var showOnlineStatus: Boolean = true,
+    var allowAddGroups: String = "Todos" // Todos, Contatos
 )

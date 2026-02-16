@@ -9,24 +9,28 @@ import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Call
-import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.CallEnd
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -46,6 +50,7 @@ class IncomingCallActivity : ComponentActivity() {
     private var callStatusListener: ValueEventListener? = null
     private var roomId: String? = null
     private var isAccepted = false
+    private val TAG = "IncomingCallActivity"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -54,10 +59,14 @@ class IncomingCallActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
-            (getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager).requestDismissKeyguard(this, null)
+            val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+            km.requestDismissKeyguard(this, null)
         } else {
             @Suppress("DEPRECATION")
-            window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or 
+                          WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or 
+                          WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or 
+                          WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
 
         val callMessage = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -67,15 +76,18 @@ class IncomingCallActivity : ComponentActivity() {
             intent.getSerializableExtra("callMessage") as? Message
         }
 
-        if (callMessage == null) { finish(); return }
+        if (callMessage == null) {
+            finish()
+            return
+        }
+        
         roomId = callMessage.callRoomId
-
         observeCallStatus()
         startRingtone()
 
         setContent {
             FriendTheme {
-                IncomingCallScreen(
+                IncomingCallSwiftUI(
                     callerName = callMessage.senderName ?: callMessage.senderId,
                     callerPhotoUrl = callMessage.senderPhotoUrl,
                     onAccept = { acceptCall(callMessage) },
@@ -91,7 +103,7 @@ class IncomingCallActivity : ComponentActivity() {
                 override fun onDataChange(snapshot: DataSnapshot) {
                     if (isAccepted) return
                     val status = snapshot.child("status").getValue(String::class.java)
-                    if (status == "ENDED" || status == "REJECTED") {
+                    if (status == "ENDED" || status == "REJECTED" || status == "CONNECTED") {
                         cleanupAndFinish()
                     }
                 }
@@ -103,26 +115,24 @@ class IncomingCallActivity : ComponentActivity() {
 
     private fun startRingtone() {
         try {
-            val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            val ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
             mediaPlayer = MediaPlayer().apply {
-                setDataSource(applicationContext, uri)
+                setDataSource(applicationContext, ringtoneUri)
                 setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
                 isLooping = true
-                prepare()
-                start()
+                setOnPreparedListener { it.start() }
+                prepareAsync()
             }
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro ao iniciar ringtone: ${e.message}")
+        }
     }
 
     private fun acceptCall(message: Message) {
         if (isAccepted) return
         isAccepted = true
-        
         stopRingtone()
-        roomId?.let { id -> callStatusListener?.let { FirebaseDatabase.getInstance().reference.child("calls").child(id).removeEventListener(it) } }
-        
         roomId?.let { FirebaseDatabase.getInstance().reference.child("calls").child(it).child("status").setValue("CONNECTED") }
-        
         val intent = Intent(this, CallActivity::class.java).apply {
             putExtra("roomId", message.callRoomId)
             putExtra("targetId", message.senderId)
@@ -141,20 +151,17 @@ class IncomingCallActivity : ComponentActivity() {
 
     private fun stopRingtone() {
         try {
-            mediaPlayer?.let {
-                if (it.isPlaying) it.stop()
-                it.reset()
-                it.release()
-            }
+            mediaPlayer?.let { if (it.isPlaying) it.stop(); it.release() }
         } catch (e: Exception) {}
         mediaPlayer = null
-        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).cancel(1002)
+        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        nm.cancel(1002)
     }
 
     private fun cleanupAndFinish() {
         stopRingtone()
         roomId?.let { id -> callStatusListener?.let { FirebaseDatabase.getInstance().reference.child("calls").child(id).removeEventListener(it) } }
-        finish()
+        if (!isDestroyed && !isFinishing) finish()
     }
 
     override fun onDestroy() {
@@ -164,43 +171,85 @@ class IncomingCallActivity : ComponentActivity() {
 }
 
 @Composable
-fun IncomingCallScreen(callerName: String, callerPhotoUrl: String?, onAccept: () -> Unit, onReject: () -> Unit) {
-    Box(modifier = Modifier.fillMaxSize().background(iOSSystemBackgroundDark)) {
-        // Subtle background gradient
-        Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Black, iOSBlue.copy(0.15f), Color.Black))))
-        
-        Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.SpaceBetween) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(top = 120.dp)) {
-                Box(contentAlignment = Alignment.Center) {
-                    if (callerPhotoUrl != null) {
-                        AsyncImage(
-                            model = callerPhotoUrl,
-                            contentDescription = null,
-                            modifier = Modifier.size(120.dp).clip(CircleShape).background(Color(0xFF1C1C1E)),
-                            contentScale = ContentScale.Crop
-                        )
-                    } else {
-                        Box(modifier = Modifier.size(120.dp).clip(CircleShape).background(Color(0xFF1C1C1E)), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.Person, null, modifier = Modifier.size(60.dp), tint = Color.Gray)
+fun IncomingCallSwiftUI(callerName: String, callerPhotoUrl: String?, onAccept: () -> Unit, onReject: () -> Unit) {
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    val pulseScale by infiniteTransition.animateFloat(
+        initialValue = 1f, targetValue = 1.1f,
+        animationSpec = infiniteRepeatable(tween(1000), RepeatMode.Reverse), label = "scale"
+    )
+
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        if (callerPhotoUrl != null) {
+            AsyncImage(
+                model = callerPhotoUrl,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize().blur(50.dp).scale(1.5f),
+                contentScale = ContentScale.Crop,
+                alpha = 0.4f
+            )
+        }
+
+        Column(
+            modifier = Modifier.fillMaxSize().padding(top = 100.dp, bottom = 80.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.scale(pulseScale)) {
+                    Surface(
+                        modifier = Modifier.size(140.dp),
+                        shape = CircleShape,
+                        color = Color.White.copy(alpha = 0.1f),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f))
+                    ) {
+                        if (callerPhotoUrl != null) {
+                            AsyncImage(
+                                model = callerPhotoUrl,
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxSize().clip(CircleShape),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            Icon(Icons.Default.Person, null, modifier = Modifier.size(80.dp).padding(30.dp), tint = Color.White)
                         }
                     }
                 }
-                Spacer(Modifier.height(24.dp))
-                Text(callerName, color = Color.White, style = MaterialTheme.typography.displayLarge, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(8.dp))
-                Text(" Audio...", color = Color.White.copy(alpha = 0.6f), style = MaterialTheme.typography.bodyLarge)
+                Spacer(Modifier.height(32.dp))
+                Text(callerName, color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Light)
+                Text("Wappi Audio...", color = Color.White.copy(alpha = 0.6f), fontSize = 18.sp, fontWeight = FontWeight.Medium)
             }
-            
-            Row(modifier = Modifier.fillMaxWidth().padding(bottom = 100.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 40.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    FloatingActionButton(onClick = onReject, containerColor = iOSRed, contentColor = Color.White, shape = CircleShape, modifier = Modifier.size(75.dp)) { Icon(Icons.Rounded.CallEnd, null, modifier = Modifier.size(35.dp)) }
+                    Button(
+                        onClick = onReject,
+                        modifier = Modifier.size(80.dp),
+                        shape = CircleShape,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF3B30)),
+                        contentPadding = PaddingValues(0.dp)
+                    ) {
+                        Icon(Icons.Rounded.CallEnd, null, modifier = Modifier.size(40.dp), tint = Color.White)
+                    }
                     Spacer(Modifier.height(12.dp))
-                    Text("Recusar", color = Color.White, style = MaterialTheme.typography.labelSmall)
+                    Text("Recusar", color = Color.White, fontSize = 15.sp)
                 }
+
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    FloatingActionButton(onClick = onAccept, containerColor = iOSGreen, contentColor = Color.White, shape = CircleShape, modifier = Modifier.size(75.dp)) { Icon(Icons.Rounded.Call, null, modifier = Modifier.size(35.dp)) }
+                    Button(
+                        onClick = onAccept,
+                        modifier = Modifier.size(80.dp),
+                        shape = CircleShape,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF34C759)),
+                        contentPadding = PaddingValues(0.dp)
+                    ) {
+                        Icon(Icons.Rounded.Call, null, modifier = Modifier.size(40.dp), tint = Color.White)
+                    }
                     Spacer(Modifier.height(12.dp))
-                    Text("Atender", color = Color.White, style = MaterialTheme.typography.labelSmall)
+                    Text("Aceitar", color = Color.White, fontSize = 15.sp)
                 }
             }
         }

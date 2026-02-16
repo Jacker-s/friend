@@ -5,11 +5,11 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
-import android.media.AudioAttributes
 import android.media.RingtoneManager
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.RemoteInput
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.messaging.FirebaseMessagingService
@@ -20,15 +20,16 @@ class FriendMessagingService : FirebaseMessagingService() {
 
     companion object {
         private const val CHANNEL_ID = "MESSAGES_CHANNEL_V7"
-        private const val CALL_CHANNEL_ID = "CALL_CHANNEL_V8" // Incremented to refresh channel settings
+        private const val CALL_CHANNEL_ID = "CALL_CHANNEL_V8"
         private const val TAG = "FriendMessagingService"
         private const val GROUP_KEY = "com.jack.friend.MESSAGES_GROUP"
+        const val KEY_TEXT_REPLY = "key_text_reply"
     }
 
     override fun onMessageReceived(remoteMessage: RemoteMessage) {
         super.onMessageReceived(remoteMessage)
         
-        Log.d(TAG, "Mensagem recebida do FCM: ${remoteMessage.data}")
+        Log.d(TAG, "Mensagem recebida do FCM. App em foreground: ${FriendApplication.isAppInForeground}")
 
         createChannels()
 
@@ -40,8 +41,28 @@ class FriendMessagingService : FirebaseMessagingService() {
             if (messageJson != null) {
                 try {
                     val message = Gson().fromJson(messageJson, Message::class.java)
-                    
-                    if (type == "CALL" || (message.callType != null && message.callStatus == "STARTING")) {
+                    val isCall = type == "CALL" || (message.callType != null && message.callStatus == "STARTING")
+
+                    if (FriendApplication.isAppInForeground) {
+                        if (isCall) {
+                            // Se for chamada e o app estiver aberto, abrimos a Activity diretamente
+                            // sem exibir o banner de notificação do sistema.
+                            val intent = Intent(this, IncomingCallActivity::class.java).apply {
+                                putExtra("callMessage", message)
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                            }
+                            try {
+                                startActivity(intent)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Erro ao abrir Activity de chamada: ${e.message}")
+                            }
+                        }
+                        // Se for mensagem de chat, ignoramos a notificação se o app estiver aberto
+                        return
+                    }
+
+                    // Se o app estiver em background, mostra a notificação normalmente
+                    if (isCall) {
                         showIncomingCallNotification(message)
                     } else {
                         showNotification(message)
@@ -73,7 +94,6 @@ class FriendMessagingService : FirebaseMessagingService() {
             .setFullScreenIntent(fullScreenPendingIntent, true)
             .setOngoing(true)
             .setAutoCancel(false)
-            .setSound(null) // Silent notification, Activity plays the ringtone
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
 
         val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
@@ -83,7 +103,7 @@ class FriendMessagingService : FirebaseMessagingService() {
         } catch (e: Exception) {
             Log.e(TAG, "Não foi possível abrir a Activity diretamente: ${e.message}")
         }
-        
+
         notificationManager.notify(message.id.hashCode(), builder.build())
     }
 
@@ -114,6 +134,29 @@ class FriendMessagingService : FirebaseMessagingService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val remoteInput = RemoteInput.Builder(KEY_TEXT_REPLY)
+            .setLabel("Responder...")
+            .build()
+        
+        val replyIntent = Intent(this, ReplyReceiver::class.java).apply {
+            putExtra("chatId", chatId)
+            putExtra("isGroup", message.isGroup)
+            putExtra("senderName", message.receiverId)
+        }
+        
+        val replyPendingIntent = PendingIntent.getBroadcast(
+            this,
+            chatId.hashCode(),
+            replyIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+        )
+
+        val replyAction = NotificationCompat.Action.Builder(
+            android.R.drawable.ic_menu_send,
+            "Responder",
+            replyPendingIntent
+        ).addRemoteInput(remoteInput).build()
+
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(senderName)
@@ -124,12 +167,12 @@ class FriendMessagingService : FirebaseMessagingService() {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setContentIntent(pendingIntent)
             .setGroup(GROUP_KEY)
+            .addAction(replyAction)
             .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))
 
         val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        
         notificationManager.notify(chatId.hashCode(), builder.build())
-        
+
         val summaryNotification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setGroup(GROUP_KEY)
@@ -155,7 +198,7 @@ class FriendMessagingService : FirebaseMessagingService() {
             if (notificationManager.getNotificationChannel(CALL_CHANNEL_ID) == null) {
                  val callChannel = NotificationChannel(CALL_CHANNEL_ID, "Chamadas", NotificationManager.IMPORTANCE_HIGH).apply {
                     description = "Notificações de chamadas recebidas"
-                    setSound(null, null) // Silent channel to avoid double ringtone
+                    setSound(null, null)
                     enableVibration(true)
                     lockscreenVisibility = Notification.VISIBILITY_PUBLIC
                 }

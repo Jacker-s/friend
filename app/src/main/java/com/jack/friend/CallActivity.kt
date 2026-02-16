@@ -150,7 +150,7 @@ class CallActivity : ComponentActivity() {
     private fun checkPermissions() {
         val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
         if (isVideo) permissions.add(Manifest.permission.CAMERA)
-        
+
         val toRequest = permissions.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (toRequest.isNotEmpty()) ActivityCompat.requestPermissions(this, toRequest.toTypedArray(), 101)
     }
@@ -165,7 +165,7 @@ class CallActivity : ComponentActivity() {
             val devices = audioManager.availableCommunicationDevices
             val speakerDevice = devices.find { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
             val earpieceDevice = devices.find { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
-            
+
             if (on && speakerDevice != null) {
                 audioManager.setCommunicationDevice(speakerDevice)
             } else if (!on && earpieceDevice != null) {
@@ -185,10 +185,10 @@ class CallActivity : ComponentActivity() {
             override fun onDataChange(snapshot: DataSnapshot) {
                 if (isEnding) return
                 val status = snapshot.child("status").getValue(String::class.java) ?: "RINGING"
-                
+
                 // Important: Always update local state to match database
                 callStatusState.value = status
-                
+
                 if (status == "ENDED" || status == "REJECTED") {
                     cleanupAndFinish()
                 }
@@ -208,7 +208,7 @@ class CallActivity : ComponentActivity() {
     private fun cleanupAndFinish() {
         if (isEnding) return
         isEnding = true
-        
+
         audioManager.mode = AudioManager.MODE_NORMAL
         audioManager.isSpeakerphoneOn = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -221,11 +221,11 @@ class CallActivity : ComponentActivity() {
         }
         webRTCManager?.onDestroy()
         webRTCManager = null
-        
+
         localVideoView?.release()
         remoteVideoView?.release()
         eglBase.release()
-        
+
         finish()
     }
 
@@ -259,7 +259,7 @@ fun MetaCallScreen(
                 factory = { remoteVideoView!! },
                 modifier = Modifier.fillMaxSize()
             )
-            
+
             if (!isCameraOff) {
                 Box(
                     modifier = Modifier
@@ -310,14 +310,14 @@ fun MetaCallScreen(
             color = MetaDarkSurface.copy(alpha = 0.8f)
         ) {
             Row(modifier = Modifier.padding(16.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { 
+                IconButton(onClick = {
                     isMuted = !isMuted
-                    onMute(isMuted) 
+                    onMute(isMuted)
                 }, modifier = Modifier.size(50.dp).clip(CircleShape).background(if (isMuted) Color.White else Color.Transparent)) {
                     Icon(if (isMuted) Icons.Default.MicOff else Icons.Default.Mic, null, tint = if (isMuted) Color.Black else Color.White, modifier = Modifier.size(24.dp))
                 }
-                
-                IconButton(onClick = { 
+
+                IconButton(onClick = {
                     isSpeakerOn = !isSpeakerOn
                     onSpeakerToggle(isSpeakerOn)
                 }, modifier = Modifier.size(50.dp).clip(CircleShape).background(if (isSpeakerOn) Color.White else Color.Transparent)) {

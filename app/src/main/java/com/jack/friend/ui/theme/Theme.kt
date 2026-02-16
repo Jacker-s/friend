@@ -29,17 +29,17 @@ data class ChatColors(
 
 val LocalChatColors = staticCompositionLocalOf {
     ChatColors(
-        bubbleMe = iOSBlue,
-        bubbleOther = MessengerBubbleOther,
-        background = Color.White,
-        topBar = Color.White,
-        onTopBar = Color.Black,
-        primary = iOSBlue,
-        secondaryBackground = iOSSystemBackgroundLight,
-        tertiaryBackground = Color.White,
-        separator = Color(0xFFC6C6C8),
-        textPrimary = Color.Black,
-        textSecondary = iOSGray
+        bubbleMe = MessengerBlue,
+        bubbleOther = MessengerBubbleOtherLight,
+        background = MessengerWhite,
+        topBar = MessengerWhite,
+        onTopBar = MessengerTextPrimaryLight,
+        primary = MessengerBlue,
+        secondaryBackground = MessengerGrayLight,
+        tertiaryBackground = MessengerWhite,
+        separator = MessengerSeparatorLight,
+        textPrimary = MessengerTextPrimaryLight,
+        textSecondary = MessengerTextSecondary
     )
 }
 
@@ -47,7 +47,7 @@ val AppTypography = Typography(
     displayLarge = TextStyle(
         fontFamily = FontFamily.Default,
         fontWeight = FontWeight.Bold,
-        fontSize = 34.sp,
+        fontSize = 30.sp,
         letterSpacing = (-0.5).sp
     ),
     titleLarge = TextStyle(
@@ -64,18 +64,18 @@ val AppTypography = Typography(
     bodyLarge = TextStyle(
         fontFamily = FontFamily.Default,
         fontWeight = FontWeight.Normal,
-        fontSize = 17.sp
+        fontSize = 16.sp
     ),
     bodyMedium = TextStyle(
         fontFamily = FontFamily.Default,
         fontWeight = FontWeight.Normal,
-        fontSize = 15.sp
+        fontSize = 14.sp
     ),
     labelSmall = TextStyle(
         fontFamily = FontFamily.Default,
         fontWeight = FontWeight.Medium,
-        fontSize = 13.sp,
-        color = iOSGray
+        fontSize = 12.sp,
+        color = MessengerTextSecondary
     )
 )
 
@@ -109,36 +109,37 @@ fun FriendTheme(
 
     val colorScheme = if (actualDark) {
         darkColorScheme(
-            primary = iOSBlue,
-            background = iOSSystemBackgroundDark,
-            surface = iOSSystemGroupedBackgroundDark,
-            onSurface = Color.White,
-            onSurfaceVariant = iOSGray,
-            outline = Color(0xFF38383A)
+            primary = MessengerBlue,
+            background = MessengerBlack,
+            surface = MessengerGrayDark,
+            onSurface = MessengerTextPrimaryDark,
+            onSurfaceVariant = MessengerTextSecondary,
+            outline = MessengerSeparatorDark
         )
     } else {
         lightColorScheme(
-            primary = iOSBlue,
-            background = iOSSystemBackgroundLight,
-            surface = iOSSystemGroupedBackgroundLight,
-            onSurface = Color.Black,
-            onSurfaceVariant = iOSGray,
-            outline = Color(0xFFC6C6C8)
+            primary = MessengerBlue,
+            secondary = MessengerBlueDark,
+            background = MessengerWhite,
+            surface = MessengerWhite,
+            onSurface = MessengerTextPrimaryLight,
+            onSurfaceVariant = MessengerTextSecondary,
+            outline = MessengerSeparatorLight
         )
     }
 
     val chatColors = ChatColors(
-        bubbleMe = iOSBlue,
-        bubbleOther = if (actualDark) MessengerBubbleOtherDark else MessengerBubbleOther,
-        background = if (actualDark) iOSSystemBackgroundDark else iOSSystemBackgroundLight,
-        topBar = if (actualDark) Color.Black else Color.White,
-        onTopBar = if (actualDark) Color.White else Color.Black,
-        primary = iOSBlue,
-        secondaryBackground = if (actualDark) iOSSystemGroupedBackgroundDark else iOSSystemGroupedBackgroundLight,
-        tertiaryBackground = if (actualDark) Color(0xFF2C2C2E) else Color(0xFFE5E5EA),
-        separator = if (actualDark) Color(0xFF38383A) else Color(0xFFC6C6C8),
-        textPrimary = if (actualDark) Color.White else Color.Black,
-        textSecondary = iOSGray
+        bubbleMe = MessengerBlue,
+        bubbleOther = if (actualDark) MessengerBubbleOtherDark else MessengerBubbleOtherLight,
+        background = if (actualDark) MessengerBlack else MessengerWhite,
+        topBar = if (actualDark) MessengerGrayDark else MessengerWhite,
+        onTopBar = if (actualDark) MessengerTextPrimaryDark else MessengerTextPrimaryLight,
+        primary = MessengerBlue,
+        secondaryBackground = if (actualDark) MessengerGrayDark else MessengerGrayLight,
+        tertiaryBackground = if (actualDark) Color(0xFF242526) else Color(0xFFF0F2F5),
+        separator = if (actualDark) MessengerSeparatorDark else MessengerSeparatorLight,
+        textPrimary = if (actualDark) MessengerTextPrimaryDark else MessengerTextPrimaryLight,
+        textSecondary = MessengerTextSecondary
     )
 
     CompositionLocalProvider(LocalChatColors provides chatColors) {

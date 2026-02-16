@@ -1,6 +1,6 @@
 [versions]
 agp = "9.0.0"
-kotlin = "2.0.21"
+kotlin = "2.3.10"
 
 coreKtx = "1.17.0"
 junit = "4.13.2"
@@ -21,6 +21,7 @@ gson = "2.13.2"
 biometric = "1.4.0-alpha02"
 playServicesAuth = "21.3.0"
 cloudinary = "3.0.2"
+lottie = "6.4.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -58,6 +59,7 @@ play-services-auth = { group = "com.google.android.gms", name = "play-services-a
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
 cloudinary-android = { group = "com.cloudinary", name = "cloudinary-android", version.ref = "cloudinary" }
+lottie-compose = { group = "com.airbnb.android", name = "lottie-compose", version.ref = "lottie" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

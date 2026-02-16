@@ -82,6 +82,9 @@ dependencies {
     // Image Loading
     implementation(libs.coil.compose)
 
+    // Lottie for Animated Emojis
+    implementation(libs.lottie.compose)
+
     // JSON Parsing
     implementation(libs.gson)
 
