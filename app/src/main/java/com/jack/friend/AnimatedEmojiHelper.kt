@@ -16,14 +16,11 @@ import androidx.compose.ui.unit.sp
 import com.airbnb.lottie.compose.*
 import kotlinx.coroutines.launch
 import java.util.*
+import kotlin.random.Random
 
 object AnimatedEmojiHelper {
     private const val BASE_URL = "https://fonts.gstatic.com/s/e/notoemoji/latest"
 
-    /**
-     * Gera a URL da animação Lottie baseada no codepoint do emoji.
-     * Exemplo: ❤️ -> 2764_fe0f
-     */
     fun getAnimUrl(emoji: String): String {
         val codepoints = mutableListOf<String>()
         var i = 0
@@ -32,10 +29,6 @@ object AnimatedEmojiHelper {
             codepoints.add(Integer.toHexString(cp).lowercase(Locale.ROOT))
             i += Character.charCount(cp)
         }
-        
-        // Remove seletores de variação desnecessários para a URL do Google se houver mais de um codepoint
-        // Mas o Google costuma usar o formato completo ou específico. 
-        // Vamos tentar o formato padrão que eles usam.
         val fileName = codepoints.joinToString("_")
         return "$BASE_URL/$fileName/lottie.json"
     }
@@ -59,7 +52,7 @@ object AnimatedEmojiHelper {
     }
 
     private fun isIgnorableInEmoji(cp: Int): Boolean {
-        return cp == 0x200D || cp in 0x1F3FB..0x1F3FF || cp == 0xFE0F // Joiners, Skin tones, Variation Selector-16
+        return cp == 0x200D || cp in 0x1F3FB..0x1F3FF || cp == 0xFE0F
     }
 
     private fun isEmoji(codePoint: Int): Boolean {
@@ -78,52 +71,65 @@ fun AnimatedEmoji(emoji: String, modifier: Modifier = Modifier, onLongClick: () 
     val url = AnimatedEmojiHelper.getAnimUrl(emoji)
     val view = LocalView.current
     val coroutineScope = rememberCoroutineScope()
-    val scale = remember { Animatable(1f) }
     
-    // Tenta carregar a composição.
+    // Estados de animação de escala e rotação
+    val scale = remember { Animatable(1f) }
+    val rotation = remember { Animatable(0f) }
+    
+    // Controlar a reprodução da animação
     val composition by rememberLottieComposition(LottieCompositionSpec.Url(url))
     
+    // Progress manual para permitir "reset" ao clicar
+    var restartTrigger by remember { mutableStateOf(0) }
     val progress by animateLottieCompositionAsState(
         composition = composition,
-        iterations = LottieConstants.IterateForever
+        iterations = LottieConstants.IterateForever,
+        restartOnPlay = true
     )
+
+    // Efeito de feedback tátil e visual ao tocar
+    val interactionModifier = Modifier
+        .graphicsLayer(
+            scaleX = scale.value,
+            scaleY = scale.value,
+            rotationZ = rotation.value
+        )
+        .pointerInput(emoji) {
+            detectTapGestures(
+                onTap = {
+                    // Feedback Tátil (Vibração)
+                    view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    
+                    coroutineScope.launch {
+                        // Reset da animação Lottie (opcional, aqui simulado pelo pulo)
+                        restartTrigger++ 
+                        
+                        // Efeito de Pulo (Bounce) e Rotação Aleatória
+                        val randomRotation = (Random.nextFloat() * 20f) - 10f // -10 a 10 graus
+                        
+                        launch {
+                            scale.animateTo(1.5f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
+                            scale.animateTo(1f, spring(dampingRatio = Spring.DampingRatioLowBouncy))
+                        }
+                        launch {
+                            rotation.animateTo(randomRotation, tween(100))
+                            rotation.animateTo(0f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
+                        }
+                    }
+                },
+                onLongPress = { onLongClick() }
+            )
+        }
 
     if (composition != null) {
         LottieAnimation(
             composition = composition,
             progress = { progress },
-            modifier = modifier
-                .graphicsLayer(scaleX = scale.value, scaleY = scale.value)
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onTap = {
-                            view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                            coroutineScope.launch {
-                                scale.animateTo(1.4f, spring(dampingRatio = Spring.DampingRatioLowBouncy))
-                                scale.animateTo(1f, spring(dampingRatio = Spring.DampingRatioLowBouncy))
-                            }
-                        },
-                        onLongPress = { onLongClick() }
-                    )
-                }
+            modifier = modifier.then(interactionModifier)
         )
     } else {
-        // Fallback: Se o Google não tiver a animação, mostra o emoji estático grande
         Box(
-            modifier = modifier
-                .graphicsLayer(scaleX = scale.value, scaleY = scale.value)
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onTap = {
-                            view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                            coroutineScope.launch {
-                                scale.animateTo(1.4f, spring(dampingRatio = Spring.DampingRatioLowBouncy))
-                                scale.animateTo(1f, spring(dampingRatio = Spring.DampingRatioLowBouncy))
-                            }
-                        },
-                        onLongPress = { onLongClick() }
-                    )
-                },
+            modifier = modifier.then(interactionModifier),
             contentAlignment = Alignment.Center
         ) {
             androidx.compose.material3.Text(text = emoji, fontSize = 64.sp)
