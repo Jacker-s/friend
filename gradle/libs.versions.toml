@@ -22,6 +22,8 @@ biometric = "1.4.0-alpha02"
 playServicesAuth = "21.3.0"
 cloudinary = "3.0.2"
 lottie = "6.4.0"
+animationCore = "1.10.3"
+uiUnit = "1.10.3"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -60,6 +62,8 @@ coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coi
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
 cloudinary-android = { group = "com.cloudinary", name = "cloudinary-android", version.ref = "cloudinary" }
 lottie-compose = { group = "com.airbnb.android", name = "lottie-compose", version.ref = "lottie" }
+androidx-compose-animation-core = { group = "androidx.compose.animation", name = "animation-core", version.ref = "animationCore" }
+androidx-compose-ui-unit = { group = "androidx.compose.ui", name = "ui-unit", version.ref = "uiUnit" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

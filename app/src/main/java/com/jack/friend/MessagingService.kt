@@ -142,6 +142,7 @@ class MessagingService : Service() {
     private fun showIncomingCall(message: Message) {
         val intent = Intent(this, IncomingCallActivity::class.java).apply {
             putExtra("callMessage", message)
+            putExtra("isVideo", message.callType == "VIDEO") // Passar se é chamada de vídeo
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
 
@@ -160,6 +161,7 @@ class MessagingService : Service() {
             putExtra("targetPhotoUrl", message.senderPhotoUrl)
             putExtra("isOutgoing", false)
             putExtra("isAcceptedFromNotification", true)
+            putExtra("isVideo", message.callType == "VIDEO") // Passar se é chamada de vídeo
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
         val acceptPI = PendingIntent.getActivity(this, 1, acceptIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
@@ -175,7 +177,7 @@ class MessagingService : Service() {
 
         val builder = NotificationCompat.Builder(this, CALL_CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("Chamada de ${message.senderName ?: message.senderId}")
+            .setContentTitle("Chamada ${if (message.callType == "VIDEO") "de vídeo " else ""}de ${message.senderName ?: message.senderId}") // Título dinâmico
             .setContentText("Toque para atender")
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)

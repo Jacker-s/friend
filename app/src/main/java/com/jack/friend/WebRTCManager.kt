@@ -11,6 +11,7 @@ class WebRTCManager(
     private val roomId: String,
     private val isCaller: Boolean,
     private val isVideo: Boolean,
+    private val eglBaseContext: EglBase.Context,
     private val localVideoView: SurfaceViewRenderer? = null,
     private val remoteVideoView: SurfaceViewRenderer? = null,
     private val onLocalStream: () -> Unit,
@@ -23,13 +24,13 @@ class WebRTCManager(
     private var localVideoTrack: VideoTrack? = null
     private var videoCapturer: VideoCapturer? = null
     private var audioDeviceModule: JavaAudioDeviceModule? = null
-    private var eglBaseContext: EglBase.Context = EglBase.create().eglBaseContext
 
     private val localCandidatesPath = if (isCaller) "callerCandidates" else "receiverCandidates"
     private val remoteCandidatesPath = if (isCaller) "receiverCandidates" else "callerCandidates"
     private val pendingIceCandidates = mutableListOf<IceCandidate>()
 
     companion object {
+        private const val TAG = "WebRTCManager"
         fun initialize(context: Context) {
             val options = PeerConnectionFactory.InitializationOptions.builder(context)
                 .createInitializationOptions()
@@ -72,7 +73,6 @@ class WebRTCManager(
                 peerConnection?.setLocalDescription(object : SimpleSdpObserver() {
                     override fun onSetSuccess() {
                         database.child("offer").setValue(mapOf("type" to sdp?.type?.canonicalForm(), "sdp" to sdp?.description))
-                        Log.d("WebRTC", "Offer set and sent")
                     }
                 }, sdp)
             }
@@ -94,7 +94,6 @@ class WebRTCManager(
                     val sessionDescription = SessionDescription(SessionDescription.Type.fromCanonicalForm(type), sdp)
                     peerConnection?.setRemoteDescription(object : SimpleSdpObserver() {
                         override fun onSetSuccess() {
-                            Log.d("WebRTC", "Remote Offer set, creating answer")
                             drainIceCandidates()
                             val constraints = MediaConstraints().apply {
                                 mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
@@ -256,13 +255,16 @@ class WebRTCManager(
         pendingIceCandidates.clear()
     }
 
-    fun toggleMute(isMuted: Boolean): Boolean {
+    // ✅ Alterna o áudio local
+    fun toggleMute(isMuted: Boolean) {
+        Log.d(TAG, "toggleMute: $isMuted")
         localAudioTrack?.setEnabled(!isMuted)
-        return !isMuted
     }
 
-    fun toggleVideo(isOn: Boolean) {
-        localVideoTrack?.setEnabled(isOn)
+    // ✅ Alterna o vídeo local (Câmera)
+    fun toggleVideo(isCameraOff: Boolean) {
+        Log.d(TAG, "toggleVideo: isCameraOff=$isCameraOff")
+        localVideoTrack?.setEnabled(!isCameraOff)
     }
 
     fun onDestroy() {

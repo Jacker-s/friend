@@ -12,7 +12,7 @@ android {
         applicationId = "com.jack.friend"
         minSdk = 24
         targetSdk = 35
-        versionCode = 6
+        versionCode = 12
         versionName = "1.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -55,7 +55,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
-
+    implementation("androidx.compose.material3:material3:1.1.x")
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
@@ -90,6 +90,8 @@ dependencies {
 
     // WebRTC
     implementation("io.github.webrtc-sdk:android:125.6422.06")
+    implementation(libs.androidx.compose.animation.core)
+    implementation(libs.androidx.compose.ui.unit)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
@@ -98,4 +100,6 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
+    implementation("androidx.emoji2:emoji2:1.5.0")
+    implementation("androidx.emoji2:emoji2-bundled:1.5.0")
 }

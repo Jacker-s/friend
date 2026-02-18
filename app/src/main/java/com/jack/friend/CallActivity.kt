@@ -80,7 +80,6 @@ class CallActivity : ComponentActivity() {
 
         if (roomId.isEmpty()) { finish(); return }
 
-        // If accepted from notification, ensure status is CONNECTED in database immediately
         if (isAcceptedFromNotification) {
             database.child("calls").child(roomId).child("status").setValue("CONNECTED")
             callStatusState.value = "CONNECTED"
@@ -116,7 +115,7 @@ class CallActivity : ComponentActivity() {
                     onHangUp = { endCall() },
                     onMute = { muted -> toggleMute(muted) },
                     onSpeakerToggle = { speakerOn -> setSpeakerphoneOn(speakerOn) },
-                    onCameraToggle = { toggleCamera() }
+                    onCameraToggle = { isOff -> toggleCamera(isOff) }
                 )
             }
         }
@@ -130,6 +129,7 @@ class CallActivity : ComponentActivity() {
                         roomId = roomId,
                         isCaller = isOutgoing,
                         isVideo = isVideo,
+                        eglBaseContext = eglBase.eglBaseContext,
                         localVideoView = localVideoView,
                         remoteVideoView = remoteVideoView,
                         onLocalStream = { },
@@ -176,8 +176,8 @@ class CallActivity : ComponentActivity() {
         }
     }
 
-    private fun toggleCamera() {
-        webRTCManager?.toggleVideo(isVideo)
+    private fun toggleCamera(isOff: Boolean) {
+        webRTCManager?.toggleVideo(isOff)
     }
 
     private fun listenForCallStatus() {
@@ -185,10 +185,7 @@ class CallActivity : ComponentActivity() {
             override fun onDataChange(snapshot: DataSnapshot) {
                 if (isEnding) return
                 val status = snapshot.child("status").getValue(String::class.java) ?: "RINGING"
-
-                // Important: Always update local state to match database
                 callStatusState.value = status
-
                 if (status == "ENDED" || status == "REJECTED") {
                     cleanupAndFinish()
                 }
@@ -247,7 +244,7 @@ fun MetaCallScreen(
     onHangUp: () -> Unit, 
     onMute: (Boolean) -> Unit,
     onSpeakerToggle: (Boolean) -> Unit,
-    onCameraToggle: () -> Unit
+    onCameraToggle: (Boolean) -> Unit
 ) {
     var isMuted by remember { mutableStateOf(false) }
     var isSpeakerOn by remember { mutableStateOf(isVideo) }
@@ -325,7 +322,10 @@ fun MetaCallScreen(
                 }
 
                 if (isVideo) {
-                    IconButton(onClick = { isCameraOff = !isCameraOff; onCameraToggle() }, modifier = Modifier.size(50.dp).clip(CircleShape).background(if (isCameraOff) Color.White else Color.Transparent)) {
+                    IconButton(onClick = { 
+                        isCameraOff = !isCameraOff
+                        onCameraToggle(isCameraOff) 
+                    }, modifier = Modifier.size(50.dp).clip(CircleShape).background(if (isCameraOff) Color.White else Color.Transparent)) {
                         Icon(if (isCameraOff) Icons.Default.VideocamOff else Icons.Default.Videocam, null, tint = if (isCameraOff) Color.Black else Color.White, modifier = Modifier.size(24.dp))
                     }
                 }

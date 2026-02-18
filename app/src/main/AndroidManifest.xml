@@ -27,6 +27,11 @@
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
 
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+
+
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
@@ -93,29 +98,30 @@
             android:label="Configurações"
             android:theme="@style/Theme.Friend" />
         <activity
-            android:name=".AboutActivity"
+            android:name=".ProfileActivity"
             android:exported="false"
-            android:label="Sobre"
+            android:label="Perfil"
             android:theme="@style/Theme.Friend" />
+
         <activity
             android:name=".CallActivity"
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.Friend" />
-        <activity
-            android:name=".IncomingCallActivity"
-            android:exported="true"
-            android:launchMode="singleInstance"
-            android:showOnLockScreen="true"
-            android:showWhenLocked="true"
-            android:turnScreenOn="true"
-            android:screenOrientation="portrait"
-            android:theme="@style/Theme.Friend" />
+
         <activity
             android:name=".ContactsActivity"
             android:exported="false"
             android:label="Contatos"
             android:theme="@style/Theme.Friend" />
+        <activity
+            android:name=".IncomingCallActivity"
+            android:exported="false"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:launchMode="singleTop" />
+
+
     </application>
 
 </manifest>
