@@ -6,9 +6,12 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.media.ToneGenerator
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.util.Log
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -33,6 +36,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
@@ -42,6 +46,7 @@ import kotlinx.coroutines.*
 import org.webrtc.EglBase
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
+import java.util.Locale
 
 class CallActivity : ComponentActivity() {
     private val database = FirebaseDatabase.getInstance().reference
@@ -61,10 +66,18 @@ class CallActivity : ComponentActivity() {
     private val eglBase = EglBase.create()
 
     private lateinit var audioManager: AudioManager
+    private var toneGenerator: ToneGenerator? = null
+    private var proximityWakeLock: PowerManager.WakeLock? = null
+    
+    private var startTimeMillis: Long = 0L
+    private var totalDurationSeconds: Long = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        
+        // Mantém a tela ligada durante a chamada
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
@@ -83,6 +96,7 @@ class CallActivity : ComponentActivity() {
         if (isAcceptedFromNotification) {
             database.child("calls").child(roomId).child("status").setValue("CONNECTED")
             callStatusState.value = "CONNECTED"
+            startTimeMillis = System.currentTimeMillis()
         }
 
         if (isVideo) {
@@ -134,7 +148,14 @@ class CallActivity : ComponentActivity() {
                         remoteVideoView = remoteVideoView,
                         onLocalStream = { },
                         onRemoteStream = {
-                            callStatusState.value = "CONNECTED"
+                            if (callStatusState.value != "CONNECTED") {
+                                activityScope.launch(Dispatchers.Main) {
+                                    callStatusState.value = "CONNECTED"
+                                    startTimeMillis = System.currentTimeMillis()
+                                    stopRingbackTone()
+                                    updateProximitySensor(true)
+                                }
+                            }
                         }
                     )
                     if (isOutgoing) webRTCManager?.startCall() else webRTCManager?.answerCall()
@@ -145,6 +166,16 @@ class CallActivity : ComponentActivity() {
         }
         
         listenForCallStatus()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        updateProximitySensor(true)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        updateProximitySensor(false)
     }
 
     private fun checkPermissions() {
@@ -161,6 +192,8 @@ class CallActivity : ComponentActivity() {
 
     private fun setSpeakerphoneOn(on: Boolean) {
         audioManager.isSpeakerphoneOn = on
+        updateProximitySensor(true)
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val devices = audioManager.availableCommunicationDevices
             val speakerDevice = devices.find { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
@@ -180,11 +213,75 @@ class CallActivity : ComponentActivity() {
         webRTCManager?.toggleVideo(isOff)
     }
 
+    private fun startRingbackTone() {
+        try {
+            if (toneGenerator == null) {
+                toneGenerator = ToneGenerator(AudioManager.STREAM_VOICE_CALL, 80)
+            }
+            toneGenerator?.startTone(ToneGenerator.TONE_SUP_RINGTONE)
+        } catch (e: Exception) {
+            Log.e("CallActivity", "Error starting ringback tone: ${e.message}")
+        }
+    }
+
+    private fun stopRingbackTone() {
+        try {
+            toneGenerator?.stopTone()
+            toneGenerator?.release()
+            toneGenerator = null
+        } catch (e: Exception) {
+            Log.e("CallActivity", "Error stopping ringback tone: ${e.message}")
+        }
+    }
+
+    private fun updateProximitySensor(enable: Boolean) {
+        // Sensor de proximidade APENAS para chamadas de áudio e quando o alto-falante estiver desligado
+        val shouldBeActive = enable && !isVideo && !audioManager.isSpeakerphoneOn
+        
+        try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (shouldBeActive) {
+                if (proximityWakeLock == null) {
+                    if (powerManager.isWakeLockLevelSupported(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)) {
+                        proximityWakeLock = powerManager.newWakeLock(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK, "Friend:CallProximity")
+                        proximityWakeLock?.setReferenceCounted(false)
+                    }
+                }
+                proximityWakeLock?.let {
+                    if (!it.isHeld) {
+                        it.acquire(2 * 60 * 60 * 1000L /* 2 horas */)
+                        Log.d("CallActivity", "Sensor de proximidade ativado")
+                    }
+                }
+            } else {
+                proximityWakeLock?.let {
+                    if (it.isHeld) {
+                        it.release()
+                        Log.d("CallActivity", "Sensor de proximidade desativado")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("CallActivity", "Erro no sensor de proximidade: ${e.message}")
+        }
+    }
+
     private fun listenForCallStatus() {
         callStatusListener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 if (isEnding) return
                 val status = snapshot.child("status").getValue(String::class.java) ?: "RINGING"
+                
+                if (status == "RINGING" && isOutgoing && toneGenerator == null) {
+                    startRingbackTone()
+                }
+
+                if (status == "CONNECTED" && callStatusState.value != "CONNECTED") {
+                    startTimeMillis = System.currentTimeMillis()
+                    stopRingbackTone()
+                    updateProximitySensor(true)
+                }
+                
                 callStatusState.value = status
                 if (status == "ENDED" || status == "REJECTED") {
                     cleanupAndFinish()
@@ -198,13 +295,45 @@ class CallActivity : ComponentActivity() {
     private fun endCall() {
         if (roomId.isNotEmpty()) {
             database.child("calls").child(roomId).child("status").setValue("ENDED")
+            
+            if (startTimeMillis > 0) {
+                totalDurationSeconds = (System.currentTimeMillis() - startTimeMillis) / 1000
+                database.child("calls").child(roomId).child("durationSec").setValue(totalDurationSeconds)
+                
+                // Update call logs for both users
+                updateCallLogs(totalDurationSeconds)
+            }
         }
         cleanupAndFinish()
+    }
+
+    private fun updateCallLogs(duration: Long) {
+        val currentUser = FirebaseAuth.getInstance().currentUser ?: return
+        database.child("uid_to_username").child(currentUser.uid).get().addOnSuccessListener { snapshot ->
+            val myUsername = snapshot.getValue(String::class.java) ?: return@addOnSuccessListener
+            
+            // Minha log
+            database.child("call_logs").child(myUsername).child(roomId).child("durationSec").setValue(duration)
+            database.child("call_logs").child(myUsername).child(roomId).child("status").setValue("ENDED")
+            
+            // Log do outro (targetId)
+            database.child("call_logs").child(targetId).child(roomId).child("durationSec").setValue(duration)
+            database.child("call_logs").child(targetId).child(roomId).child("status").setValue("ENDED")
+        }
     }
 
     private fun cleanupAndFinish() {
         if (isEnding) return
         isEnding = true
+        
+        if (totalDurationSeconds == 0L && startTimeMillis > 0) {
+            totalDurationSeconds = (System.currentTimeMillis() - startTimeMillis) / 1000
+            database.child("calls").child(roomId).child("durationSec").setValue(totalDurationSeconds)
+            updateCallLogs(totalDurationSeconds)
+        }
+
+        stopRingbackTone()
+        updateProximitySensor(false)
 
         audioManager.mode = AudioManager.MODE_NORMAL
         audioManager.isSpeakerphoneOn = false
@@ -250,6 +379,30 @@ fun MetaCallScreen(
     var isSpeakerOn by remember { mutableStateOf(isVideo) }
     var isCameraOff by remember { mutableStateOf(!isVideo) }
     
+    var callDuration by remember { mutableLongStateOf(0L) }
+    
+    LaunchedEffect(status) {
+        if (status == "CONNECTED") {
+            while (isActive) {
+                delay(1000)
+                callDuration++
+            }
+        } else {
+            callDuration = 0L
+        }
+    }
+
+    val formattedDuration = remember(callDuration) {
+        val hours = callDuration / 3600
+        val minutes = (callDuration % 3600) / 60
+        val seconds = callDuration % 60
+        if (hours > 0) {
+            String.format(Locale.getDefault(), "%02d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
+        }
+    }
+    
     Box(modifier = Modifier.fillMaxSize().background(MetaBlack)) {
         if (isVideo && status == "CONNECTED") {
             AndroidView(
@@ -272,6 +425,19 @@ fun MetaCallScreen(
                     )
                 }
             }
+            
+            // Timer for Video Call
+            Text(
+                text = formattedDuration,
+                color = Color.White,
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 60.dp)
+                    .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+            )
+            
         } else {
             Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(MetaBlack, MetaDarkSurface, MetaBlack))))
             Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
@@ -293,9 +459,9 @@ fun MetaCallScreen(
                 Spacer(Modifier.height(12.dp))
                 val statusText = when (status) {
                     "RINGING" -> if (isOutgoing) "Chamando..." else "Recebendo chamada..."
-                    "CONNECTED" -> "Chamada em andamento"
+                    "CONNECTED" -> formattedDuration
                     "MUTED" -> "Microfone silenciado"
-                    else -> "Conectando..."
+                    else -> if (isOutgoing) "Ligando..." else "Conectando..."
                 }
                 Text(statusText, color = MetaGray4, style = MaterialTheme.typography.bodyLarge)
             }

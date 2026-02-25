@@ -91,7 +91,25 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- Intent filter for sharing single media -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="video/*" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+
+            <!-- Intent filter for sharing multiple media -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="video/*" />
+            </intent-filter>
         </activity>
+
         <activity
             android:name=".SettingsActivity"
             android:exported="false"
@@ -120,6 +138,13 @@
             android:showWhenLocked="true"
             android:turnScreenOn="true"
             android:launchMode="singleTop" />
+        <activity
+            android:name=".UserProfileActivity"
+            android:exported="false" />
+        <activity android:name=".CallsActivity" />
+        <activity
+            android:name=".LoginActivity"
+            android:exported="false" />
 
 
     </application>

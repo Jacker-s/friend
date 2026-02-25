@@ -2,26 +2,24 @@ package com.jack.friend.ui.screens
 
 import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import com.jack.friend.ChatSummary
 import com.jack.friend.UserProfile
 import com.jack.friend.UserStatus
-import com.jack.friend.MetaChatItem
-import com.jack.friend.MetaStatusRow
-import com.jack.friend.MetaUserItem
+import com.jack.friend.ui.chat.MetaChatItem
+import com.jack.friend.ui.chat.MetaUserItem
+import com.jack.friend.ui.chat.MetaStatusRow
 import com.jack.friend.ui.theme.LocalChatColors
 
 /**
  * Tela iOS-like para lista de chats (SwiftUI 3 vibe).
- * - NÃO muda tua lógica
- * - Só reorganiza visual e deixa pronto para você evoluir depois
  */
 @Composable
 fun ChatListScreenIOS(
@@ -38,29 +36,30 @@ fun ChatListScreenIOS(
     onChatClick: (ChatSummary) -> Unit,
     onChatLongClick: (ChatSummary) -> Unit,
     onUserSearchClick: (UserProfile) -> Unit,
-    onAddContactSearch: (String) -> Unit
+    onAddContactSearch: (String) -> Unit,
+    onUserChatClick: (UserProfile) -> Unit
 ) {
     val view = LocalView.current
+    val chatColors = LocalChatColors.current
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(LocalChatColors.current.background)
+            .background(chatColors.background) // Usar a cor de fundo do tema
     ) {
-        // “Stories”/Status no topo (igual você já tem)
         if (!isSearching) {
             Spacer(Modifier.height(6.dp))
             MetaStatusRow(
                 statuses = statuses,
                 myPhotoUrl = myPhotoUrl,
                 myUsername = myUsername,
+                contacts = contacts,
                 onAdd = onStatusAdd,
                 onViewUserStatuses = onStatusView
             )
             Spacer(Modifier.height(6.dp))
         }
 
-        // Lista
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 14.dp)
@@ -72,17 +71,17 @@ fun ChatListScreenIOS(
                     MetaUserItem(
                         user = user,
                         isContact = isContact,
-                        onChatClick = { onUserSearchClick(user) },
+                        onItemClick = { onUserSearchClick(user) },
+                        onChatClick = { onUserChatClick(user) },
                         onAddContactClick = { onAddContactSearch(user.id) }
                     )
 
-                    // divisor leve (iOS list)
                     if (index < searchResults.size - 1) {
                         Spacer(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(0.5.dp)
-                                .background(LocalChatColors.current.separator)
+                                .background(chatColors.separator)
                                 .padding(start = 78.dp)
                         )
                     }
@@ -91,6 +90,7 @@ fun ChatListScreenIOS(
                 itemsIndexed(filteredChats, key = { _, s -> s.friendId }) { index, summary ->
                     MetaChatItem(
                         summary = summary,
+                        myId = myUsername,
                         onClick = { onChatClick(summary) },
                         onLongClick = {
                             view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
@@ -103,7 +103,7 @@ fun ChatListScreenIOS(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(0.5.dp)
-                                .background(LocalChatColors.current.separator)
+                                .background(chatColors.separator)
                                 .padding(start = 88.dp)
                         )
                     }

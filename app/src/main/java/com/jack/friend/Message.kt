@@ -6,6 +6,14 @@ import com.google.firebase.database.PropertyName
 import java.io.Serializable
 
 @IgnoreExtraProperties
+data class LinkPreview(
+    var url: String = "",
+    var title: String? = null,
+    var description: String? = null,
+    var imageUrl: String? = null
+) : Serializable
+
+@IgnoreExtraProperties
 data class Message(
 
     // =========================
@@ -21,12 +29,17 @@ data class Message(
     // =========================
     var text: String = "",
     var imageUrl: String? = null,
+    var videoUrl: String? = null,
+    var videoThumbnailUrl: String? = null,
     var audioUrl: String? = null,
     var stickerUrl: String? = null,
 
     // Campo genérico de mídia (fallback futuro)
     var isMedia: Boolean = false,
     var mediaUrl: String? = null,
+
+    // Link Preview
+    var linkPreview: LinkPreview? = null,
 
     // =========================
     // Estados da mensagem
@@ -96,6 +109,10 @@ data class Message(
         get() = !imageUrl.isNullOrEmpty()
 
     @get:Exclude
+    val isVideo: Boolean
+        get() = !videoUrl.isNullOrEmpty()
+
+    @get:Exclude
     val isAudio: Boolean
         get() = !audioUrl.isNullOrEmpty()
 
@@ -105,7 +122,7 @@ data class Message(
 
     @get:Exclude
     val hasMedia: Boolean
-        get() = isImage || isAudio || !mediaUrl.isNullOrEmpty() || isSticker
+        get() = isImage || isVideo || isAudio || !mediaUrl.isNullOrEmpty() || isSticker
 
     @get:Exclude
     val isExpired: Boolean
@@ -116,6 +133,7 @@ data class Message(
         get() = when {
             isDeleted -> "Mensagem apagada"
             isImage -> "📷 Imagem"
+            isVideo -> "📹 Vídeo"
             isAudio -> "🎤 Áudio"
             isSticker -> "Sticker"
             isCall -> if (callType == "VIDEO") "📹 Chamada de vídeo" else "📞 Chamada de áudio"

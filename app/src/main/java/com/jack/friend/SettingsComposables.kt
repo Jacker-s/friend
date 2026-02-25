@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.jack.friend.ui.theme.LocalChatColors
 import com.jack.friend.ui.theme.WarmPrimary
 
@@ -37,6 +38,7 @@ fun MetaSettingsItem(
     icon: ImageVector? = null,
     iconColor: Color = WarmPrimary,
     textColor: Color = Color.Unspecified,
+    subtitle: String? = null,
     trailing: @Composable (() -> Unit)? = null,
     onClick: (() -> Unit)? = null,
     enabled: Boolean = true
@@ -57,13 +59,22 @@ fun MetaSettingsItem(
             }
             Spacer(Modifier.width(12.dp))
         }
-        Text(
-            title,
-            style = MaterialTheme.typography.bodyLarge,
-            color = if (textColor == Color.Unspecified) MaterialTheme.colorScheme.onSurface else textColor,
-            modifier = Modifier.weight(1f),
-            fontWeight = FontWeight.Medium
-        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (textColor == Color.Unspecified) MaterialTheme.colorScheme.onSurface else textColor,
+                fontWeight = FontWeight.Medium
+            )
+            if (subtitle != null) {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp
+                )
+            }
+        }
         if (trailing != null) {
             trailing()
         } else if (onClick != null) {
@@ -77,12 +88,14 @@ fun MetaSettingsSwitchItem(
     icon: ImageVector,
     iconColor: Color,
     title: String,
+    subtitle: String? = null,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     enabled: Boolean = true
 ) {
     MetaSettingsItem(
         title = title,
+        subtitle = subtitle,
         icon = icon,
         iconColor = iconColor,
         enabled = enabled,

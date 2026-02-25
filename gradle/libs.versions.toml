@@ -24,6 +24,8 @@ cloudinary = "3.0.2"
 lottie = "6.4.0"
 animationCore = "1.10.3"
 uiUnit = "1.10.3"
+material3 = "1.4.0"
+jsoup = "1.18.3"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -64,6 +66,8 @@ cloudinary-android = { group = "com.cloudinary", name = "cloudinary-android", ve
 lottie-compose = { group = "com.airbnb.android", name = "lottie-compose", version.ref = "lottie" }
 androidx-compose-animation-core = { group = "androidx.compose.animation", name = "animation-core", version.ref = "animationCore" }
 androidx-compose-ui-unit = { group = "androidx.compose.ui", name = "ui-unit", version.ref = "uiUnit" }
+androidx-material3 = { group = "androidx.compose.material3", name = "material3", version.ref = "material3" }
+jsoup = { group = "org.jsoup", name = "jsoup", version.ref = "jsoup" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

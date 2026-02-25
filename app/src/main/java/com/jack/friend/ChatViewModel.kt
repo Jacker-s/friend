@@ -1,17 +1,24 @@
 package com.jack.friend
 
+import android.content.ContentUris
 import android.content.Context
 import android.media.MediaRecorder
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import android.util.Log
+import android.util.Patterns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.cloudinary.android.MediaManager
 import com.cloudinary.android.callback.ErrorInfo
 import com.cloudinary.android.callback.UploadCallback
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
+import com.google.firebase.auth.FirebaseAuthInvalidUserException
+import com.google.firebase.auth.FirebaseAuthUserCollisionException
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.database.*
 import com.google.firebase.messaging.FirebaseMessaging
@@ -22,6 +29,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import org.jsoup.Jsoup
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URL
@@ -88,8 +96,8 @@ class ChatViewModel : ViewModel() {
         private const val STATUS_TTL_MS = 86_400_000L // 24h
 
         private const val FOLDER_PROFILES = "profiles"
-        private const val FOLDER_GROUP_PROFILES = "group_profiles"
         private const val FOLDER_CHAT_IMAGES = "chat_images"
+        private const val FOLDER_CHAT_VIDEOS = "chat_videos"
         private const val FOLDER_STATUSES = "statuses"
     }
 
@@ -100,6 +108,13 @@ class ChatViewModel : ViewModel() {
     private val errorHandler = CoroutineExceptionHandler { _, t ->
         Log.e(TAG, "Coroutine error: ${t.message}", t)
     }
+    // ---------------------------
+// Call logs
+// ---------------------------
+    private val _callLogs = MutableStateFlow<List<CallLog>>(emptyList())
+    val callLogs: StateFlow<List<CallLog>> = _callLogs
+
+    private var callLogsListener: ValueEventListener? = null
 
     // ---------------------------
     // StateFlows (UI state)
@@ -137,6 +152,9 @@ class ChatViewModel : ViewModel() {
     private val _showOnlineStatus = MutableStateFlow(true)
     val showOnlineStatus: StateFlow<Boolean> = _showOnlineStatus
 
+    private val _isHiddenFromSearch = MutableStateFlow(false)
+    val isHiddenFromSearch: StateFlow<Boolean> = _isHiddenFromSearch
+
     private val _messages = MutableStateFlow<List<Message>>(emptyList())
     val messages: StateFlow<List<Message>> = _messages
 
@@ -151,9 +169,6 @@ class ChatViewModel : ViewModel() {
 
     private val _targetProfile = MutableStateFlow<UserProfile?>(null)
     val targetProfile: StateFlow<UserProfile?> = _targetProfile
-
-    private val _targetGroup = MutableStateFlow<Group?>(null)
-    val targetGroup: StateFlow<Group?> = _targetGroup
 
     private val _pinnedMessage = MutableStateFlow<Message?>(null)
     val pinnedMessage: StateFlow<Message?> = _pinnedMessage
@@ -172,6 +187,16 @@ class ChatViewModel : ViewModel() {
 
     private val _blockedProfiles = MutableStateFlow<List<UserProfile>>(emptyList())
     val blockedProfiles: StateFlow<List<UserProfile>> = _blockedProfiles
+
+    private val _localMedia = MutableStateFlow<List<LocalMedia>>(emptyList())
+    val localMedia: StateFlow<List<LocalMedia>> = _localMedia
+
+    // Compartilhamento externo
+    private val _pendingSharedMedia = MutableStateFlow<List<Uri>>(emptyList())
+    val pendingSharedMedia: StateFlow<List<Uri>> = _pendingSharedMedia
+
+    private val _pendingSharedText = MutableStateFlow<String?>(null)
+    val pendingSharedText: StateFlow<String?> = _pendingSharedText
 
     // ---------------------------
     // Listeners / Jobs / Timers
@@ -212,6 +237,24 @@ class ChatViewModel : ViewModel() {
         removeListeners()
     }
 
+
+    private fun listenToCallLogs(username: String) {
+        callLogsListener?.let { db.child("call_logs").child(username).removeEventListener(it) }
+
+        callLogsListener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val list = snapshot.children.mapNotNull { it.getValue(CallLog::class.java) }
+                    .sortedByDescending { it.timestamp }
+                _callLogs.value = list
+            }
+            override fun onCancelled(error: DatabaseError) {}
+        }
+
+        db.child("call_logs").child(username)
+            .limitToLast(200)
+            .addValueEventListener(callLogsListener!!)
+    }
+
     // ---------------------------
     // Helpers (paths / logging)
     // ---------------------------
@@ -225,15 +268,11 @@ class ChatViewModel : ViewModel() {
         return if (a < b) "${a}_$b" else "${b}_$a"
     }
 
-    private fun messagePath(me: String, target: String, isGroup: Boolean): String =
-        if (isGroup) "group_messages/$target" else "messages/${chatKey(me, target)}"
-
-    private fun pinnedPathKey(me: String, target: String, isGroup: Boolean): String =
-        if (isGroup) target else chatKey(me, target)
+    private fun messagePath(me: String, target: String): String =
+        "messages/${chatKey(me, target)}"
 
     private fun safeMe(): String = _myUsername.value
     private fun safeTarget(): String = _targetId.value
-    private fun isGroupTarget(): Boolean = _targetGroup.value != null
 
     // ---------------------------
     // Recent emojis
@@ -266,10 +305,12 @@ class ChatViewModel : ViewModel() {
                     loadMyProfile(username)
                     listenToBlockedUsers(username)
                     listenToChats(username)
+                    listenToCallLogs(username)
                     listenToContacts(username)
                     listenToStatuses(username)
                     setupPresence(username)
                     updateFcmToken(username)
+
                 } else {
                     logE("Username não encontrado para o UID: $uid")
                 }
@@ -298,6 +339,7 @@ class ChatViewModel : ViewModel() {
                 _showLastSeen.value = profile?.showLastSeen ?: true
                 _showReadReceipts.value = profile?.showReadReceipts ?: true
                 _showOnlineStatus.value = profile?.showOnlineStatus ?: true
+                _isHiddenFromSearch.value = profile?.isHiddenFromSearch ?: false
             }
 
             override fun onCancelled(error: DatabaseError) {
@@ -331,14 +373,23 @@ class ChatViewModel : ViewModel() {
     }
 
     fun logout() {
-        val user = safeMe()
-        if (user.isNotEmpty()) {
-            db.child("users").child(user).child("isOnline").setValue(false)
-            db.child("users").child(user).child("lastActive").setValue(ServerValue.TIMESTAMP)
-            db.child("fcmTokens").child(user).removeValue()
+        val user = auth.currentUser
+        val username = safeMe()
+        if (username.isNotEmpty()) {
+            db.child("users").child(username).child("isOnline").setValue(false)
+            db.child("users").child(username).child("lastActive").setValue(ServerValue.TIMESTAMP)
+            // Remove FCM token apenas se o usuário está realmente fazendo logout e não sendo excluído
+            // A exclusão do token para o cenário de exclusão de conta será tratada em deleteAccount
+            db.child("fcmTokens").child(username).removeValue()
         }
 
         removeListeners()
+
+        callLogsListener?.let { l ->
+            if (username.isNotEmpty()) db.child("call_logs").child(username).removeEventListener(l)
+        }
+        callLogsListener = null
+
         auth.signOut()
 
         _isUserLoggedIn.value = false
@@ -347,9 +398,23 @@ class ChatViewModel : ViewModel() {
         _messages.value = emptyList()
         _targetId.value = ""
         _targetProfile.value = null
-        _targetGroup.value = null
         _pinnedMessage.value = null
         _isTargetTyping.value = false
+        _myId.value = "" // Limpar também o myId
+        _myName.value = ""
+        _myPhotoUrl.value = null
+        _myStatus.value = ""
+        _myPresenceStatus.value = "Online"
+        _recentEmojis.value = emptyList()
+        _showLastSeen.value = true
+        _showReadReceipts.value = true
+        _showOnlineStatus.value = true
+        _isHiddenFromSearch.value = false
+        _contacts.value = emptyList()
+        _searchResults.value = emptyList()
+        _statuses.value = emptyList()
+        _blockedUsers.value = emptyList()
+        _blockedProfiles.value = emptyList()
     }
 
     private fun removeListeners() {
@@ -367,7 +432,7 @@ class ChatViewModel : ViewModel() {
         }
 
         pinnedMessageListener?.let { l ->
-            val key = pinnedPathKey(me, safeTarget(), isGroupTarget())
+            val key = chatKey(me, safeTarget())
             db.child("pinned").child(key).removeEventListener(l)
         }
 
@@ -396,17 +461,17 @@ class ChatViewModel : ViewModel() {
         releaseRecorderSafely()
     }
 
-    // ---------------------------
+    // ---------------------------\
     // Target
-    // ---------------------------
-    fun setTargetId(id: String, isGroup: Boolean = false) {
+    // ---------------------------\
+    fun setTargetId(id: String) {
         val me = safeMe()
         if (_targetId.value == id && id.isNotEmpty()) return
 
-        // limpar alvo anterior (sem duplicar código em 4 lugares)
+        // limpar alvo anterior
         val oldTarget = _targetId.value
         if (oldTarget.isNotEmpty() && me.isNotEmpty()) {
-            val oldKey = pinnedPathKey(me, oldTarget, _targetGroup.value != null)
+            val oldKey = chatKey(me, oldTarget)
             db.child("typing").child(oldKey).child(me).setValue(false)
         }
 
@@ -416,7 +481,7 @@ class ChatViewModel : ViewModel() {
         targetProfileListener = null
 
         pinnedMessageListener?.let { l ->
-            val oldKey = pinnedPathKey(me, oldTarget, _targetGroup.value != null)
+            val oldKey = chatKey(me, oldTarget)
             db.child("pinned").child(oldKey).removeEventListener(l)
         }
         pinnedMessageListener = null
@@ -431,7 +496,6 @@ class ChatViewModel : ViewModel() {
 
         if (id.isBlank()) {
             _targetProfile.value = null
-            _targetGroup.value = null
             _messages.value = emptyList()
             _isTargetTyping.value = false
             _pinnedMessage.value = null
@@ -441,7 +505,7 @@ class ChatViewModel : ViewModel() {
         _isTargetTyping.value = _activeChats.value.find { it.friendId == id }?.isTyping ?: false
 
         // pinned
-        val pinKey = pinnedPathKey(me, id, isGroup)
+        val pinKey = chatKey(me, id)
         pinnedMessageListener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 _pinnedMessage.value = snapshot.getValue(Message::class.java)
@@ -450,36 +514,63 @@ class ChatViewModel : ViewModel() {
         }
         db.child("pinned").child(pinKey).addValueEventListener(pinnedMessageListener!!)
 
-        // perfil ou grupo
-        if (!isGroup) {
-            _targetGroup.value = null
-            targetProfileListener = object : ValueEventListener {
-                override fun onDataChange(snapshot: DataSnapshot) {
-                    _targetProfile.value = snapshot.getValue(UserProfile::class.java)
-                }
-                override fun onCancelled(error: DatabaseError) {}
+        // perfil
+        targetProfileListener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                _targetProfile.value = snapshot.getValue(UserProfile::class.java)
             }
-            db.child("users").child(id).addValueEventListener(targetProfileListener!!)
-        } else {
-            _targetProfile.value = null
-            db.child("groups").child(id).get()
-                .addOnSuccessListener { _targetGroup.value = it.getValue(Group::class.java) }
+            override fun onCancelled(error: DatabaseError) {}
         }
+        db.child("users").child(id).addValueEventListener(targetProfileListener!!)
 
-        listenToMessages(id, isGroup)
+        listenToMessages(id)
     }
 
-    private fun syncTypingStatus(friendUsername: String, isGroup: Boolean = false) {
+    private fun syncFriendPresence(friendUsername: String) {
+        if (presenceListeners.containsKey(friendUsername)) {
+            db.child("users").child(friendUsername).child("isOnline").get().addOnSuccessListener { snap ->
+                val online = snap.getValue(Boolean::class.java) ?: false
+                updateLocalChatPresence(friendUsername, online)
+            }
+            return
+        }
+
+        val listener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val user = snapshot.getValue(UserProfile::class.java)
+                val isOnline = user?.isOnline ?: false
+                val presenceStatus = user?.presenceStatus ?: "Online"
+                updateLocalChatPresence(friendUsername, isOnline, presenceStatus)
+            }
+            override fun onCancelled(error: DatabaseError) {}
+        }
+
+        presenceListeners[friendUsername] = listener
+        db.child("users").child(friendUsername).addValueEventListener(listener)
+    }
+
+    private fun updateLocalChatPresence(friendId: String, isOnline: Boolean, status: String? = null) {
+        _activeChats.value = _activeChats.value.map {
+            if (it.friendId == friendId) {
+                it.copy(isOnline = isOnline, presenceStatus = status ?: it.presenceStatus)
+            } else it
+        }
+        _contacts.value = _contacts.value.map {
+            if (it.id == friendId) {
+                it.copy(isOnline = isOnline, presenceStatus = status ?: it.presenceStatus)
+            } else it
+        }
+    }
+
+    private fun syncTypingStatus(friendUsername: String) {
         if (typingListeners.containsKey(friendUsername)) return
         val me = safeMe()
         if (me.isEmpty()) return
 
-        val key = if (isGroup) friendUsername else chatKey(me, friendUsername)
+        val key = chatKey(me, friendUsername)
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                val isTyping = if (isGroup) {
-                    snapshot.children.any { it.key != me && it.getValue(Boolean::class.java) == true }
-                } else snapshot.getValue(Boolean::class.java) ?: false
+                val isTyping = snapshot.getValue(Boolean::class.java) ?: false
 
                 _activeChats.value = _activeChats.value.map {
                     if (it.friendId == friendUsername) it.copy(isTyping = isTyping) else it
@@ -490,7 +581,7 @@ class ChatViewModel : ViewModel() {
         }
 
         typingListeners[friendUsername] = listener
-        val ref = if (isGroup) db.child("typing").child(key) else db.child("typing").child(key).child(friendUsername)
+        val ref = db.child("typing").child(key).child(friendUsername)
         ref.addValueEventListener(listener)
     }
 
@@ -499,21 +590,20 @@ class ChatViewModel : ViewModel() {
         val target = safeTarget()
         if (me.isEmpty() || target.isEmpty()) return
 
-        val isGroup = isGroupTarget()
-        val key = pinnedPathKey(me, target, isGroup)
+        val key = chatKey(me, target)
         val typingRef = db.child("typing").child(key).child(me)
         typingRef.setValue(isTyping)
         if (isTyping) typingRef.onDisconnect().setValue(false)
     }
 
-    // ---------------------------
+    // ---------------------------\\
     // Send message / sticker / reactions
-    // ---------------------------
-    fun sendMessage(text: String, isGroup: Boolean, tempDurationHours: Int = 0, replyingTo: Message? = null) {
+    // ---------------------------\\
+    fun sendMessage(text: String, tempDurationHours: Int = 0, replyingTo: Message? = null) {
         val me = safeMe()
         val target = safeTarget()
         if (me.isEmpty() || target.isEmpty()) return
-        if (!isGroup && _blockedUsers.value.contains(target)) return
+        if (_blockedUsers.value.contains(target)) return
 
         val msgId = db.push().key ?: return
         val msg = Message(
@@ -522,7 +612,7 @@ class ChatViewModel : ViewModel() {
             receiverId = target,
             text = text,
             timestamp = System.currentTimeMillis(),
-            isGroup = isGroup,
+            isGroup = false,
             senderName = _myName.value,
             replyToId = replyingTo?.id,
             replyToText = replyingTo?.text
@@ -533,15 +623,48 @@ class ChatViewModel : ViewModel() {
             expiryTime = if (tempDurationHours > 0) System.currentTimeMillis() + (tempDurationHours * 3_600_000L) else null
         )
 
-        sendMessageObject(msg)
+        // Verificação de link
+        val url = extractUrl(text)
+        if (url != null) {
+            viewModelScope.launch(Dispatchers.IO) {
+                val preview = fetchLinkPreview(url)
+                withContext(Dispatchers.Main) {
+                    msg.linkPreview = preview
+                    sendMessageObject(msg)
+                }
+            }
+        } else {
+            sendMessageObject(msg)
+        }
+        
         setTyping(false)
     }
 
-    fun sendSticker(stickerUrl: String, isGroup: Boolean, replyingTo: Message? = null) {
+    private fun extractUrl(text: String): String? {
+        val matcher = Patterns.WEB_URL.matcher(text)
+        return if (matcher.find()) matcher.group() else null
+    }
+
+    private suspend fun fetchLinkPreview(url: String): LinkPreview? = withContext(Dispatchers.IO) {
+        try {
+            val response = Jsoup.connect(url).timeout(5000).get()
+            val title = response.select("meta[property=og:title]").attr("content").takeIf { it.isNotEmpty() }
+                ?: response.title()
+            val description = response.select("meta[property=og:description]").attr("content").takeIf { it.isNotEmpty() }
+                ?: response.select("meta[name=description]").attr("content")
+            val image = response.select("meta[property=og:image]").attr("content").takeIf { it.isNotEmpty() }
+            
+            LinkPreview(url = url, title = title, description = description, imageUrl = image)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    fun sendSticker(stickerUrl: String, replyingTo: Message? = null) {
         val me = safeMe()
         val target = safeTarget()
         if (me.isEmpty() || target.isEmpty()) return
-        if (!isGroup && _blockedUsers.value.contains(target)) return
+        if (_blockedUsers.value.contains(target)) return
 
         val msgId = db.push().key ?: return
         val msg = Message(
@@ -551,7 +674,7 @@ class ChatViewModel : ViewModel() {
             stickerUrl = stickerUrl,
             isSticker = true,
             timestamp = System.currentTimeMillis(),
-            isGroup = isGroup,
+            isGroup = false,
             senderName = _myName.value,
             replyToId = replyingTo?.id,
             replyToText = replyingTo?.text
@@ -569,22 +692,35 @@ class ChatViewModel : ViewModel() {
         val me = safeMe()
         if (me != message.senderId) return
 
-        val path = if (message.isGroup) "group_messages/${message.receiverId}"
-        else "messages/${chatKey(message.senderId, message.receiverId)}"
+        val path = "messages/${chatKey(message.senderId, message.receiverId)}"
 
-        db.child(path).child(message.id).updateChildren(mapOf("text" to newText, "isEdited" to true))
+        val updates = mutableMapOf<String, Any?>("text" to newText, "isEdited" to true)
+        
+        // Se o novo texto tiver link, atualizar o preview
+        val url = extractUrl(newText)
+        if (url != null) {
+            viewModelScope.launch(Dispatchers.IO) {
+                val preview = fetchLinkPreview(url)
+                withContext(Dispatchers.Main) {
+                    updates["linkPreview"] = preview
+                    db.child(path).child(message.id).updateChildren(updates)
+                }
+            }
+        } else {
+            updates["linkPreview"] = null
+            db.child(path).child(message.id).updateChildren(updates)
+        }
     }
 
     fun pinMessage(message: Message) {
-        val key = if (message.isGroup) message.receiverId else chatKey(message.senderId, message.receiverId)
+        val key = chatKey(message.senderId, message.receiverId)
         db.child("pinned").child(key).setValue(message)
     }
 
     fun unpinMessage() {
         val me = safeMe()
         val target = safeTarget()
-        val isGroup = isGroupTarget()
-        val key = pinnedPathKey(me, target, isGroup)
+        val key = chatKey(me, target)
         db.child("pinned").child(key).removeValue()
     }
 
@@ -593,8 +729,7 @@ class ChatViewModel : ViewModel() {
         if (me.isEmpty()) return
         pushRecentEmoji(emoji)
 
-        val path = if (message.isGroup) "group_messages/${message.receiverId}"
-        else "messages/${chatKey(message.senderId, message.receiverId)}"
+        val path = "messages/${chatKey(message.senderId, message.receiverId)}"
 
         db.child(path).child(message.id).child("reactions").child(me).setValue(emoji)
     }
@@ -603,25 +738,22 @@ class ChatViewModel : ViewModel() {
         val me = safeMe()
         val target = safeTarget()
         if (me.isEmpty() || target.isEmpty()) return
-        val isGroup = isGroupTarget()
 
-        if (!isGroup) {
-            val path = "messages/${chatKey(me, target)}"
-            db.child(path).orderByChild("receiverId").equalTo(me).get()
-                .addOnSuccessListener { snapshot ->
-                    snapshot.children.forEach {
-                        if (it.child("isRead").getValue(Boolean::class.java) != true) {
-                            it.ref.child("isRead").setValue(true)
-                        }
+        val path = "messages/${chatKey(me, target)}"
+        db.child(path).orderByChild("receiverId").equalTo(me).get()
+            .addOnSuccessListener { snapshot ->
+                snapshot.children.forEach {
+                    if (it.child("isRead").getValue(Boolean::class.java) != true) {
+                        it.ref.child("isRead").setValue(true)
                     }
                 }
-        }
+            }
         db.child("chats").child(me).child(target).child("hasUnread").setValue(false)
     }
 
-    // ---------------------------
+    // ---------------------------\\
     // Audio recording + upload
-    // ---------------------------
+    // ---------------------------\\
     fun startRecording(cacheDir: File) {
         try {
             audioFile = File.createTempFile("audio_", ".m4a", cacheDir)
@@ -667,7 +799,7 @@ class ChatViewModel : ViewModel() {
         mediaRecorder = null
     }
 
-    fun stopRecording(isGroup: Boolean, tempDurationHours: Int = 0, cancel: Boolean = false) {
+    fun stopRecording(tempDurationHours: Int = 0, cancel: Boolean = false) {
         stopTimer()
         val duration = System.currentTimeMillis() - recordingStartTime
 
@@ -680,13 +812,14 @@ class ChatViewModel : ViewModel() {
             return
         }
 
-        audioFile?.let { uploadAudio(it, isGroup, tempDurationHours) }
+        audioFile?.let { uploadAudio(it, tempDurationHours) }
     }
 
-    private suspend fun uploadToCloudinary(uri: Uri, folder: String): String? =
+    private suspend fun uploadToCloudinary(uri: Uri, folder: String, resourceType: String = "auto"): String? =
         suspendCoroutine { continuation ->
             MediaManager.get().upload(uri)
                 .option("folder", folder)
+                .option("resource_type", resourceType)
                 .callback(object : UploadCallback {
                     override fun onStart(requestId: String) {}
                     override fun onProgress(requestId: String, bytes: Long, totalBytes: Long) {}
@@ -703,7 +836,7 @@ class ChatViewModel : ViewModel() {
                 }).dispatch()
         }
 
-    private fun uploadAudio(file: File, isGroup: Boolean, tempDurationHours: Int) {
+    private fun uploadAudio(file: File, tempDurationHours: Int) {
         val me = safeMe()
         val target = safeTarget()
         if (me.isEmpty() || target.isEmpty()) return
@@ -721,7 +854,7 @@ class ChatViewModel : ViewModel() {
                     receiverId = target,
                     audioUrl = url,
                     timestamp = System.currentTimeMillis(),
-                    isGroup = isGroup,
+                    isGroup = false,
                     senderName = _myName.value,
                     expiryTime = if (tempDurationHours > 0) System.currentTimeMillis() + (tempDurationHours * 3_600_000L) else null
                 )
@@ -733,14 +866,14 @@ class ChatViewModel : ViewModel() {
         }
     }
 
-    fun uploadImage(uri: Uri, isGroup: Boolean, tempDurationHours: Int = 0) {
+    fun uploadImage(uri: Uri, tempDurationHours: Int = 0) {
         val me = safeMe()
         val target = safeTarget()
         if (me.isEmpty() || target.isEmpty()) return
 
         viewModelScope.launch(errorHandler) {
             try {
-                val url = uploadToCloudinary(uri, FOLDER_CHAT_IMAGES)
+                val url = uploadToCloudinary(uri, FOLDER_CHAT_IMAGES, "image")
                 if (url != null) {
                     val msgId = db.push().key ?: return@launch
                     sendMessageObject(
@@ -750,7 +883,7 @@ class ChatViewModel : ViewModel() {
                             receiverId = target,
                             imageUrl = url,
                             timestamp = System.currentTimeMillis(),
-                            isGroup = isGroup,
+                            isGroup = false,
                             senderName = _myName.value,
                             expiryTime = if (tempDurationHours > 0) System.currentTimeMillis() + (tempDurationHours * 3_600_000L) else null
                         )
@@ -762,16 +895,39 @@ class ChatViewModel : ViewModel() {
         }
     }
 
-    // ---------------------------
-    // Persist message + summaries
-    // ---------------------------
-    private fun sendMessageObject(msg: Message) {
-        if (msg.isGroup) {
-            db.child("group_messages/${msg.receiverId}").child(msg.id).setValue(msg)
-            updateChatSummary(msg)
-            return
-        }
+    fun uploadVideo(uri: Uri, tempDurationHours: Int = 0) {
+        val me = safeMe()
+        val target = safeTarget()
+        if (me.isEmpty() || target.isEmpty()) return
 
+        viewModelScope.launch(errorHandler) {
+            try {
+                val url = uploadToCloudinary(uri, FOLDER_CHAT_VIDEOS, "video")
+                if (url != null) {
+                    val msgId = db.push().key ?: return@launch
+                    sendMessageObject(
+                        Message(
+                            id = msgId,
+                            senderId = me,
+                            receiverId = target,
+                            videoUrl = url,
+                            timestamp = System.currentTimeMillis(),
+                            isGroup = false,
+                            senderName = _myName.value,
+                            expiryTime = if (tempDurationHours > 0) System.currentTimeMillis() + (tempDurationHours * 3_600_000L) else null
+                        )
+                    )
+                }
+            } catch (e: Exception) {
+                logE("uploadVideo error: ${e.message}", e)
+            }
+        }
+    }
+
+    // ---------------------------\
+    // Persist message + summaries
+    // ---------------------------\
+    private fun sendMessageObject(msg: Message) {
         viewModelScope.launch(errorHandler) {
             try {
                 if (_blockedUsers.value.contains(msg.receiverId)) return@launch
@@ -792,132 +948,47 @@ class ChatViewModel : ViewModel() {
                 val lastMsgText = when {
                     msg.audioUrl != null -> "🎤 Áudio"
                     msg.imageUrl != null -> "📷 Imagem"
+                    msg.videoUrl != null -> "📹 Vídeo"
                     msg.stickerUrl != null -> "Sticker"
                     else -> msg.text
                 }
 
-                if (msg.isGroup) {
-                    val group = db.child("groups").child(friend).get().await().getValue(Group::class.java) ?: return@launch
+                val friendProf = db.child("users").child(friend).get().await().getValue(UserProfile::class.java)
 
-                    val summary = ChatSummary(
-                        friendId = friend,
-                        lastMessage = "${msg.senderName}: $lastMsgText",
-                        timestamp = msg.timestamp,
-                        lastSenderId = me,
-                        friendName = group.name,
-                        friendPhotoUrl = group.photoUrl,
-                        isGroup = true,
-                        hasUnread = false
+                val summary = ChatSummary(
+                    friendId = friend,
+                    lastMessage = lastMsgText,
+                    timestamp = msg.timestamp,
+                    lastSenderId = me,
+                    friendName = friendProf?.name ?: friend,
+                    friendPhotoUrl = friendProf?.photoUrl,
+                    isGroup = false,
+                    isOnline = friendProf?.isOnline ?: false,
+                    hasUnread = false,
+                    presenceStatus = friendProf?.presenceStatus ?: "Online"
+                )
+
+                db.child("chats").child(me).child(friend).setValue(summary)
+
+                val meProf = db.child("users").child(me).get().await().getValue(UserProfile::class.java)
+                db.child("chats").child(friend).child(me).setValue(
+                    summary.copy(
+                        friendId = me,
+                        friendName = meProf?.name ?: me,
+                        friendPhotoUrl = meProf?.photoUrl,
+                        hasUnread = true,
+                        presenceStatus = meProf?.presenceStatus ?: "Online"
                     )
-
-                    group.members.keys.forEach { member ->
-                        db.child("chats").child(member).child(friend)
-                            .setValue(summary.copy(hasUnread = member != me))
-                    }
-                } else {
-                    val friendProf = db.child("users").child(friend).get().await().getValue(UserProfile::class.java)
-
-                    val summary = ChatSummary(
-                        friendId = friend,
-                        lastMessage = lastMsgText,
-                        timestamp = msg.timestamp,
-                        lastSenderId = me,
-                        friendName = friendProf?.name ?: friend,
-                        friendPhotoUrl = friendProf?.photoUrl,
-                        isGroup = false,
-                        isOnline = friendProf?.isOnline ?: false,
-                        hasUnread = false,
-                        presenceStatus = friendProf?.presenceStatus ?: "Online"
-                    )
-
-                    db.child("chats").child(me).child(friend).setValue(summary)
-
-                    val meProf = db.child("users").child(me).get().await().getValue(UserProfile::class.java)
-                    db.child("chats").child(friend).child(me).setValue(
-                        summary.copy(
-                            friendId = me,
-                            friendName = meProf?.name ?: me,
-                            friendPhotoUrl = meProf?.photoUrl,
-                            hasUnread = true,
-                            presenceStatus = meProf?.presenceStatus ?: "Online"
-                        )
-                    )
-                }
+                )
             } catch (e: Exception) {
                 logE("Erro ao atualizar resumo: ${e.message}", e)
             }
         }
     }
 
-    // ---------------------------
-    // Groups
-    // ---------------------------
-    fun createGroup(name: String, members: List<String>, photoUri: Uri?, callback: (Boolean, String?) -> Unit) {
-        val me = safeMe()
-        if (me.isEmpty()) return
-
-        viewModelScope.launch(errorHandler) {
-            try {
-                val groupId = "GROUP_${UUID.randomUUID()}"
-                val photoUrl = photoUri?.let { uploadToCloudinary(it, FOLDER_GROUP_PROFILES) }
-
-                val membersMap = (members + me).associateWith { true }
-                val group = Group(
-                    id = groupId,
-                    name = name,
-                    photoUrl = photoUrl,
-                    members = membersMap,
-                    createdBy = me,
-                    timestamp = System.currentTimeMillis()
-                )
-
-                db.child("groups").child(groupId).setValue(group).await()
-
-                val welcomeMsg = Message(
-                    id = db.push().key ?: "",
-                    senderId = "SYSTEM",
-                    receiverId = groupId,
-                    text = "Grupo criado",
-                    timestamp = System.currentTimeMillis(),
-                    isGroup = true,
-                    senderName = "Sistema"
-                )
-                db.child("group_messages/$groupId").child(welcomeMsg.id).setValue(welcomeMsg).await()
-                updateChatSummary(welcomeMsg)
-
-                callback(true, groupId)
-            } catch (e: Exception) {
-                callback(false, e.message)
-            }
-        }
-    }
-
-    fun deleteGroup(groupId: String, callback: (Boolean, String?) -> Unit) {
-        val me = safeMe()
-        if (me.isEmpty()) return
-
-        db.child("groups").child(groupId).get().addOnSuccessListener { snapshot ->
-            val group = snapshot.getValue(Group::class.java)
-            if (group != null && group.createdBy == me) {
-                viewModelScope.launch(errorHandler) {
-                    try {
-                        db.child("group_messages").child(groupId).removeValue()
-                        group.members.keys.forEach { member ->
-                            db.child("chats").child(member).child(groupId).removeValue()
-                        }
-                        db.child("groups").child(groupId).removeValue().await()
-                        callback(true, null)
-                    } catch (e: Exception) {
-                        callback(false, e.message)
-                    }
-                }
-            } else callback(false, "Apenas o criador pode excluir o grupo")
-        }.addOnFailureListener { callback(false, it.message) }
-    }
-
-    // ---------------------------
+    // ---------------------------\
     // Presence
-    // ---------------------------
+    // ---------------------------\
     fun updatePresence(online: Boolean) {
         val user = safeMe()
         if (user.isEmpty()) return
@@ -930,24 +1001,38 @@ class ChatViewModel : ViewModel() {
         }
     }
 
-    // ---------------------------
+    // ---------------------------\
     // Chats / Contacts listeners
-    // ---------------------------
+    // ---------------------------\
     private fun listenToChats(username: String) {
         chatsListener?.let { db.child("chats").child(username).removeEventListener(it) }
 
         chatsListener = object : ValueEventListener {
             override fun onDataChange(s: DataSnapshot) {
                 val blocked = _blockedUsers.value.toSet()
-                val chats = s.children.mapNotNull { it.getValue(ChatSummary::class.java) }
+                val incomingChats = s.children.mapNotNull { it.getValue(ChatSummary::class.java) }
                     .filter { it.friendId.isNotBlank() && !blocked.contains(it.friendId) }
                     .sortedWith(compareByDescending<ChatSummary> { it.isPinned }.thenByDescending { it.timestamp })
 
-                _activeChats.value = chats
+                val currentChats = _activeChats.value
+                val mergedChats = incomingChats.map { newChat ->
+                    val existing = currentChats.find { it.friendId == newChat.friendId }
+                    if (existing != null) {
+                        newChat.copy(
+                            isOnline = existing.isOnline,
+                            presenceStatus = existing.presenceStatus,
+                            isTyping = existing.isTyping
+                        )
+                    } else {
+                        newChat
+                    }
+                }
 
-                chats.forEach { chat ->
-                    if (!chat.isGroup) syncFriendPresence(chat.friendId)
-                    syncTypingStatus(chat.friendId, chat.isGroup)
+                _activeChats.value = mergedChats
+
+                mergedChats.forEach { chat ->
+                    syncFriendPresence(chat.friendId)
+                    syncTypingStatus(chat.friendId)
                 }
             }
             override fun onCancelled(e: DatabaseError) {}
@@ -984,7 +1069,7 @@ class ChatViewModel : ViewModel() {
         val me = safeMe()
         val cleanTarget = if (targetUsername.startsWith("@")) targetUsername.substring(1) else targetUsername
         val target = cleanTarget.uppercase().trim()
-        
+
         if (me.isEmpty()) return callback(false, "Usuário não autenticado")
         if (me == target) return callback(false, "Não pode adicionar a si mesmo")
 
@@ -1005,39 +1090,16 @@ class ChatViewModel : ViewModel() {
         }
     }
 
-    private fun syncFriendPresence(friendUsername: String) {
-        if (presenceListeners.containsKey(friendUsername)) return
-
-        val listener = object : ValueEventListener {
-            override fun onDataChange(snapshot: DataSnapshot) {
-                val user = snapshot.getValue(UserProfile::class.java)
-                val isOnline = user?.isOnline ?: false
-                val presenceStatus = user?.presenceStatus ?: "Online"
-
-                _activeChats.value = _activeChats.value.map {
-                    if (it.friendId == friendUsername) it.copy(isOnline = isOnline, presenceStatus = presenceStatus) else it
-                }
-                _contacts.value = _contacts.value.map {
-                    if (it.id == friendUsername) it.copy(isOnline = isOnline, presenceStatus = presenceStatus) else it
-                }
-            }
-            override fun onCancelled(error: DatabaseError) {}
-        }
-
-        presenceListeners[friendUsername] = listener
-        db.child("users").child(friendUsername).addValueEventListener(listener)
-    }
-
-    // ---------------------------
+    // ---------------------------\
     // Messages listener
-    // ---------------------------
-    private fun listenToMessages(target: String, isGroup: Boolean) {
+    // ---------------------------\
+    private fun listenToMessages(target: String) {
         val me = safeMe()
         if (me.isEmpty()) return
 
         currentChatPath?.let { path -> messagesListener?.let { db.child(path).removeEventListener(it) } }
 
-        val path = messagePath(me, target, isGroup)
+        val path = messagePath(me, target)
         currentChatPath = path
 
         messagesListener = object : ValueEventListener {
@@ -1057,7 +1119,7 @@ class ChatViewModel : ViewModel() {
                 // remove expirados
                 msgs.forEach {
                     if (it.expiryTime != null && it.expiryTime!! < now) {
-                        db.child(path).child(it.id).removeValue()
+                        deleteMessage(it.id, target)
                     }
                 }
             }
@@ -1091,44 +1153,66 @@ class ChatViewModel : ViewModel() {
         }
     }
 
-    // ---------------------------
-    // Auth (mantido)
-    // ---------------------------
+    // ---------------------------\
+    // Auth
+    // ---------------------------\
     fun signUp(email: String, password: String, username: String, imageUri: Uri?, callback: (Boolean, String?) -> Unit) {
         val upper = username.uppercase().trim()
+        val currentUser = auth.currentUser
 
-        auth.createUserWithEmailAndPassword(email, password).addOnCompleteListener { task ->
-            if (task.isSuccessful) {
-                val uid = auth.currentUser?.uid ?: ""
-                db.child("users").child(upper).get().addOnSuccessListener { snapshot ->
-                    if (snapshot.exists()) {
-                        auth.currentUser?.delete()
-                        callback(false, "Este nome de usuário já está em uso.")
-                    } else {
-                        viewModelScope.launch(errorHandler) {
-                            try {
-                                val photoUrl = imageUri?.let { uploadToCloudinary(it, FOLDER_PROFILES) }
-                                val profile = UserProfile(id = upper, uid = uid, name = username, photoUrl = photoUrl, isOnline = true)
-
-                                db.child("uid_to_username").child(uid).setValue(upper).await()
-                                db.child("users").child(upper).setValue(profile).await()
-
-                                _myUsername.value = upper
-                                _isUserLoggedIn.value = true
-                                setupUserSession()
-                                callback(true, null)
-                            } catch (e: Exception) {
-                                auth.currentUser?.delete()
-                                callback(false, "Erro ao salvar perfil: ${e.message}")
-                            }
-                        }
+        if (currentUser != null && _myId.value == currentUser.uid && _myUsername.value.isEmpty()) {
+            // Usuário já autenticado mas sem perfil (caso de conta órfã)
+            completeProfile(currentUser.uid, upper, username, imageUri, callback)
+        } else {
+            auth.createUserWithEmailAndPassword(email, password).addOnCompleteListener { task ->
+                if (task.isSuccessful) {
+                    val uid = auth.currentUser?.uid ?: ""
+                    completeProfile(uid, upper, username, imageUri, callback)
+                } else {
+                    val errorMsg = when (task.exception) {
+                        is FirebaseAuthUserCollisionException -> "Este e-mail já está em uso."
+                        is FirebaseAuthInvalidCredentialsException -> "Formato de e-mail inválido ou senha fraca."
+                        else -> task.exception?.localizedMessage ?: "Erro ao criar conta"
                     }
-                }.addOnFailureListener {
-                    auth.currentUser?.delete()
-                    callback(false, "Erro de permissão no banco: ${it.message}")
+                    callback(false, errorMsg)
                 }
-            } else callback(false, task.exception?.message ?: "Erro ao criar conta")
+            }
         }
+    }
+
+    private fun completeProfile(uid: String, upper: String, username: String, imageUri: Uri?, callback: (Boolean, String?) -> Unit) {
+        db.child("users").child(upper).get().addOnSuccessListener { snapshot ->
+            if (snapshot.exists()) {
+                // Se o username já existir, não deletamos o user do auth se ele já existia antes
+                callback(false, "Este nome de usuário já está em uso.")
+            } else {
+                viewModelScope.launch(errorHandler) {
+                    try {
+                        val photoUrl = imageUri?.let { uploadToCloudinary(it, FOLDER_PROFILES) }
+                        val profile = UserProfile(id = upper, uid = uid, name = username, photoUrl = photoUrl, isOnline = true)
+
+                        db.child("uid_to_username").child(uid).setValue(upper).await()
+                        db.child("users").child(upper).setValue(profile).await()
+
+                        _myUsername.value = upper
+                        _isUserLoggedIn.value = true
+                        setupUserSession()
+                        callback(true, null)
+                    } catch (e: Exception) {
+                        callback(false, "Erro ao salvar perfil: ${e.message}")
+                    }
+                }
+            }
+        }.addOnFailureListener {
+            callback(false, "Erro de permissão no banco: ${it.message}")
+        }
+    }
+
+    fun finalizeProfile(username: String, name: String, imageUri: Uri?, callback: (Boolean, String?) -> Unit) {
+        val upper = username.uppercase().trim()
+        val uid = _myId.value
+        if (uid.isEmpty()) return callback(false, "Sessão inválida")
+        completeProfile(uid, upper, name, imageUri, callback)
     }
 
     fun login(email: String, password: String, callback: (Boolean, String?) -> Unit) {
@@ -1143,14 +1227,23 @@ class ChatViewModel : ViewModel() {
                         setupUserSession()
                         callback(true, null)
                     } else {
-                        auth.signOut()
-                        callback(false, "Perfil não encontrado no banco de dados.")
+                        // MUDANÇA: Permite o login mesmo sem perfil
+                        _myUsername.value = ""
+                        _isUserLoggedIn.value = true
+                        _myId.value = uid
+                        callback(true, "NEED_PROFILE")
                     }
                 }.addOnFailureListener {
-                    auth.signOut()
                     callback(false, "Erro ao carregar dados do perfil: ${it.message}")
                 }
-            } else callback(false, task.exception?.message ?: "E-mail ou senha incorretos")
+            } else {
+                val errorMsg = when (task.exception) {
+                    is FirebaseAuthInvalidUserException -> "Usuário não encontrado ou desativado."
+                    is FirebaseAuthInvalidCredentialsException -> "E-mail ou senha incorretos."
+                    else -> "E-mail ou senha incorretos."
+                }
+                callback(false, errorMsg)
+            }
         }
     }
 
@@ -1199,9 +1292,9 @@ class ChatViewModel : ViewModel() {
         }
     }
 
-    // ---------------------------
-    // Profile update / delete account (mantido)
-    // ---------------------------
+    // ---------------------------\
+    // Profile update / delete account
+    // ---------------------------\
     fun updateProfile(
         name: String? = null,
         imageUri: Uri? = null,
@@ -1249,6 +1342,7 @@ class ChatViewModel : ViewModel() {
                             _showOnlineStatus.value = v
                             updatePresence(FriendApplication.instance.isForeground.value)
                         }
+                        (it["isHiddenFromSearch"] as? Boolean)?.let { v -> _isHiddenFromSearch.value = v }
                     }
                 }
 
@@ -1261,79 +1355,101 @@ class ChatViewModel : ViewModel() {
     }
 
     fun deleteAccount(callback: (Boolean, String?) -> Unit) {
-        val user = auth.currentUser ?: return
+        val user = auth.currentUser ?: return callback(false, "Usuário não autenticado")
         val username = safeMe()
+        val uid = user.uid
 
         viewModelScope.launch(errorHandler) {
             try {
-                val chatsSnapshot = db.child("chats").child(username).get().await()
-                chatsSnapshot.children.forEach { chatSnap ->
-                    val summary = chatSnap.getValue(ChatSummary::class.java) ?: return@forEach
-                    val friendId = summary.friendId
-
-                    if (!summary.isGroup) {
-                        val update = mapOf(
-                            "friendName" to "Conta Excluída",
-                            "lastMessage" to "Esta conta foi excluída",
-                            "friendPhotoUrl" to null,
-                            "isOnline" to false,
-                            "presenceStatus" to "Offline"
-                        )
-                        db.child("chats").child(friendId).child(username).updateChildren(update)
-                    }
-                }
-
-                user.delete().await()
-
                 if (username.isNotEmpty()) {
-                    db.child("users").child(username).removeValue()
-                    db.child("chats").child(username).removeValue()
-                    db.child("contacts").child(username).removeValue()
-                    db.child("blocks").child(username).removeValue()
-                    db.child("fcmTokens").child(username).removeValue()
+                    // 1. Limpar mídias e status (antes de perder o UID)
+                    try {
+                        val statusSnap = db.child("status").orderByChild("userId").equalTo(username).get().await()
+                        statusSnap.children.forEach { s -> s.ref.removeValue() }
+                    } catch (e: Exception) { Log.e(TAG, "Erro status: ${e.message}") }
 
-                    db.child("status").orderByChild("userId").equalTo(username).get().addOnSuccessListener {
-                        it.children.forEach { s -> s.ref.removeValue() }
+                    // 2. Limpar os outros nós (Tokens, Chats, Logs)
+                    val paths = listOf(
+                        "fcmTokens/$username",
+                        "chats/$username",
+                        "contacts/$username",
+                        "blocks/$username",
+                        "call_logs/$username",
+                        "call_notifications/$username"
+                    )
+                    paths.forEach { path ->
+                        db.child(path).removeValue().await()
                     }
+
+                    // 3. Deletar o perfil principal (users/LULU)
+                    // Fazemos isso por último nos dados para garantir que os outros nós
+                    // que dependem de 'users' ou 'uid_to_username' ainda validem a regra
+                    db.child("users/$username").removeValue().await()
+                    db.child("uid_to_username/$uid").removeValue().await()
                 }
-                db.child("uid_to_username").child(user.uid).removeValue()
+
+                // 4. AGORA SIM: Deletar a credencial de acesso
+                // Após este comando, o auth.uid vira null e nada mais pode ser deletado no Database
+                user.delete().await()
 
                 logout()
                 callback(true, null)
             } catch (e: Exception) {
-                callback(false, e.message)
+                val msg = if (e.message?.contains("recent-login") == true)
+                    "Re-autenticação necessária." else e.message
+                callback(false, msg)
             }
         }
     }
 
-    // ---------------------------
-    // Status (mantido)
-    // ---------------------------
-    fun uploadStatus(uri: Uri) {
+    // ---------------------------\
+    // Status
+    // ---------------------------\
+    fun uploadStatus(uris: List<Uri>) {
         val uid = safeMe()
         if (uid.isEmpty()) return
 
         viewModelScope.launch(errorHandler) {
-            try {
-                val url = uploadToCloudinary(uri, FOLDER_STATUSES)
-                if (url != null) {
-                    val statusId = db.push().key ?: return@launch
-                    val status = UserStatus(
-                        id = statusId,
-                        userId = uid,
-                        username = _myName.value,
-                        imageUrl = url,
-                        userPhotoUrl = _myPhotoUrl.value,
-                        timestamp = System.currentTimeMillis()
-                    )
-                    db.child("status").child(statusId).setValue(status)
+            uris.forEach { uri ->
+                try {
+                    val mime = FriendApplication.instance.contentResolver.getType(uri)
+                    val isVideo = mime?.startsWith("video") == true
+                    val folder = if (isVideo) FOLDER_CHAT_VIDEOS else FOLDER_STATUSES
+                    val resourceType = if (isVideo) "video" else "image"
+                    
+                    val url = uploadToCloudinary(uri, folder, resourceType)
+                    if (url != null) {
+                        val statusId = db.push().key ?: return@forEach
+                        val status = UserStatus(
+                            id = statusId,
+                            userId = uid,
+                            username = _myName.value,
+                            imageUrl = if (isVideo) "" else url,
+                            videoUrl = if (isVideo) url else null,
+                            isVideo = isVideo,
+                            userPhotoUrl = _myPhotoUrl.value,
+                            timestamp = System.currentTimeMillis()
+                        )
+                        db.child("status").child(statusId).setValue(status)
+                    }
+                } catch (e: Exception) {
+                    logE("Upload status error: ${e.message}")
                 }
-            } catch (_: Exception) {}
+            }
         }
     }
 
     fun deleteStatus(statusId: String) {
-        db.child("status").child(statusId).removeValue()
+        db.child("status").child(statusId).get().addOnSuccessListener { snapshot ->
+            val status = snapshot.getValue(UserStatus::class.java)
+            if (status != null) {
+                val urlToDelete = if (status.isVideo) status.videoUrl else status.imageUrl
+                if (!urlToDelete.isNullOrEmpty()) {
+                    deleteFromFirebaseStorage(urlToDelete)
+                }
+            }
+            db.child("status").child(statusId).removeValue()
+        }
     }
 
     fun markStatusAsViewed(statusId: String) {
@@ -1366,9 +1482,9 @@ class ChatViewModel : ViewModel() {
         db.child("status").limitToLast(50).addValueEventListener(statusesListener!!)
     }
 
-    // ---------------------------
-    // Search / chat ops / block / calls (mantido)
-    // ---------------------------
+    // ---------------------------\
+    // Search / chat ops / block / calls
+    // ---------------------------\
     fun searchUsers(query: String) {
         searchJob?.cancel()
         if (query.isBlank()) {
@@ -1382,12 +1498,12 @@ class ChatViewModel : ViewModel() {
                 val blocked = _blockedUsers.value.toSet()
                 val snapshot = db.child("users").get().await()
                 val users = snapshot.children.mapNotNull { it.getValue(UserProfile::class.java) }
-                    .filter { 
-                        it.id != _myUsername.value && 
-                        !blocked.contains(it.id) && 
-                        !it.isHiddenFromSearch 
+                    .filter {
+                        it.id != _myUsername.value &&
+                                !blocked.contains(it.id) &&
+                                !it.isHiddenFromSearch
                     }
-                    .filter { 
+                    .filter {
                         if (query.startsWith("@")) {
                             val idQuery = query.substring(1)
                             it.id.contains(idQuery, true)
@@ -1407,26 +1523,26 @@ class ChatViewModel : ViewModel() {
         val me = safeMe()
         if (me.isEmpty() || friendId.isBlank()) return
 
-        db.child("chats").child(me).child(friendId).get().addOnSuccessListener { snapshot ->
-            val summary = snapshot.getValue(ChatSummary::class.java)
-            if (summary?.isGroup == true) {
-                db.child("chats").child(me).child(friendId).updateChildren(mapOf("lastMessage" to "Conversa excluída", "hasUnread" to false))
-            } else {
-                db.child("chats").child(me).child(friendId).removeValue()
+        db.child("messages/${chatKey(me, friendId)}").get().addOnSuccessListener { snapshot ->
+            snapshot.children.forEach { msgSnap ->
+                val msg = msgSnap.getValue(Message::class.java)
+                if (msg != null) deleteMessageMedia(msg)
             }
+            db.child("chats").child(me).child(friendId).removeValue()
         }
     }
 
-    fun clearChat(friendId: String, isGroup: Boolean) {
+    fun clearChat(friendId: String) {
         val me = safeMe()
         if (me.isEmpty()) return
 
-        if (isGroup) {
-            db.child("chats").child(me).child(friendId).updateChildren(
-                mapOf("lastMessage" to "Conversa limpa", "timestamp" to System.currentTimeMillis(), "hasUnread" to false)
-            )
-        } else {
-            db.child("messages/${chatKey(me, friendId)}").removeValue()
+        val path = "messages/${chatKey(me, friendId)}"
+        db.child(path).get().addOnSuccessListener { snapshot ->
+            snapshot.children.forEach { msgSnap ->
+                val msg = msgSnap.getValue(Message::class.java)
+                if (msg != null) deleteMessageMedia(msg)
+            }
+            db.child(path).removeValue()
 
             val upd = mapOf("lastMessage" to "Conversa limpa", "timestamp" to System.currentTimeMillis(), "hasUnread" to false)
             db.child("chats").child(me).child(friendId).updateChildren(upd)
@@ -1465,52 +1581,75 @@ class ChatViewModel : ViewModel() {
                     } catch (_: Exception) {}
                 }
             }
-            override fun onCancelled(error: DatabaseError) {}
+            override fun onCancelled(error: DatabaseError) {
+                logE("listenToBlockedUsers cancelled: ${error.message}")
+            }
         }
         db.child("blocks").child(username).addValueEventListener(blockedListener!!)
     }
 
-    fun deleteMessage(messageId: String, friendId: String, isGroup: Boolean) {
+    fun deleteMessage(messageId: String, friendId: String) {
         val me = safeMe()
         if (me.isEmpty()) return
 
-        val path = if (isGroup) "group_messages/$friendId" else "messages/${chatKey(me, friendId)}"
+        val path = "messages/${chatKey(me, friendId)}"
 
-        db.child(path).child(messageId).removeValue().addOnSuccessListener {
-            db.child(path).orderByChild("timestamp").limitToLast(1).get().addOnSuccessListener { snapshot ->
-                val lastMsg = snapshot.children.firstOrNull()?.getValue(Message::class.java)
-                val meRef = db.child("chats").child(me).child(friendId)
-                val frRef = db.child("chats").child(friendId).child(me)
+        db.child(path).child(messageId).get().addOnSuccessListener { snapshot ->
+            val msg = snapshot.getValue(Message::class.java)
+            if (msg != null) deleteMessageMedia(msg)
 
-                if (lastMsg != null) {
-                    val updatedText = when {
-                        lastMsg.audioUrl != null -> "🎤 Áudio"
-                        lastMsg.imageUrl != null -> "📷 Imagem"
-                        lastMsg.stickerUrl != null -> "Sticker"
-                        else -> lastMsg.text
-                    }
-                    meRef.child("lastMessage").setValue(updatedText)
-                    meRef.child("timestamp").setValue(lastMsg.timestamp)
-                    if (!isGroup) {
+            db.child(path).child(messageId).removeValue().addOnSuccessListener {
+                db.child(path).orderByChild("timestamp").limitToLast(1).get().addOnSuccessListener { nextSnapshot ->
+                    val lastMsg = nextSnapshot.children.firstOrNull()?.getValue(Message::class.java)
+                    val meRef = db.child("chats").child(me).child(friendId)
+                    val frRef = db.child("chats").child(friendId).child(me)
+
+                    if (lastMsg != null) {
+                        val updatedText = when {
+                            lastMsg.audioUrl != null -> "🎤 Áudio"
+                            lastMsg.imageUrl != null -> "📷 Imagem"
+                            lastMsg.videoUrl != null -> "📹 Vídeo"
+                            lastMsg.stickerUrl != null -> "Sticker"
+                            else -> lastMsg.text
+                        }
+                        meRef.child("lastMessage").setValue(updatedText)
+                        meRef.child("timestamp").setValue(lastMsg.timestamp)
                         frRef.child("lastMessage").setValue(updatedText)
                         frRef.child("timestamp").setValue(lastMsg.timestamp)
+                    } else {
+                        meRef.child("lastMessage").setValue("Conversa vazia")
+                        frRef.child("lastMessage").setValue("Conversa vazia")
                     }
-                } else {
-                    meRef.child("lastMessage").setValue("Conversa vazia")
-                    if (!isGroup) frRef.child("lastMessage").setValue("Conversa vazia")
                 }
             }
         }
     }
 
-    fun startCall(isVideo: Boolean, isGroup: Boolean, customRoomId: String) {
+    private fun deleteMessageMedia(msg: Message) {
+        msg.imageUrl?.let { deleteFromFirebaseStorage(it) }
+        msg.videoUrl?.let { deleteFromFirebaseStorage(it) }
+        msg.audioUrl?.let { deleteFromFirebaseStorage(it) }
+    }
+
+    private fun deleteFromFirebaseStorage(url: String) {
+        if (!url.contains("firebasestorage.googleapis.com")) return
+        try {
+            FirebaseStorage.getInstance().getReferenceFromUrl(url).delete()
+                .addOnFailureListener { logE("Erro ao deletar mídia do Storage: ${it.message}") }
+        } catch (e: Exception) {
+            logE("Erro ao obter referência para deletar mídia: ${e.message}")
+        }
+    }
+
+    fun startCall(isVideo: Boolean, customRoomId: String) {
         val me = safeMe()
         val target = safeTarget()
-        if (me.isEmpty() || target.isEmpty()) return
+        if (me.isEmpty()) return
+        if (target.isEmpty()) return
 
         viewModelScope.launch(errorHandler) {
             try {
-                if (!isGroup && _blockedUsers.value.contains(target)) return@launch
+                if (_blockedUsers.value.contains(target)) return@launch
 
                 val roomId = customRoomId
                 val callData = mapOf(
@@ -1522,29 +1661,66 @@ class ChatViewModel : ViewModel() {
                 )
                 db.child("calls").child(roomId).setValue(callData)
 
+                // ✅ Puxa dados do alvo para cachear no log
+                val targetProf = db.child("users").child(target).get().await().getValue(UserProfile::class.java)
+                val meProf = db.child("users").child(me).get().await().getValue(UserProfile::class.java)
+
+                val now = System.currentTimeMillis()
+                val type = if (isVideo) "VIDEO" else "AUDIO"
+
+                // ✅ LOG para quem ligou
+                val myLog = CallLog(
+                    id = roomId,
+                    peerId = target,
+                    peerName = targetProf?.name ?: target,
+                    peerPhotoUrl = targetProf?.photoUrl,
+                    direction = "OUT",
+                    type = type,
+                    status = "RINGING",
+                    timestamp = now
+                )
+
+                // ✅ LOG para quem recebe
+                val theirLog = CallLog(
+                    id = roomId,
+                    peerId = me,
+                    peerName = meProf?.name ?: me,
+                    peerPhotoUrl = meProf?.photoUrl,
+                    direction = "IN",
+                    type = type,
+                    status = "RINGING",
+                    timestamp = now
+                )
+
+                db.child("call_logs").child(me).child(roomId).setValue(myLog)
+                db.child("call_logs").child(target).child(roomId).setValue(theirLog)
+
+                // ✅ sua notificação + mensagem “isCall”
                 val msgId = db.push().key ?: return@launch
                 val msg = Message(
                     id = msgId,
                     senderId = me,
                     receiverId = target,
                     text = if (isVideo) "Chamada de vídeo" else "Chamada de áudio",
-                    timestamp = System.currentTimeMillis(),
-                    isGroup = isGroup,
+                    timestamp = now,
+                    isGroup = false,
                     senderName = _myName.value,
                     senderPhotoUrl = _myPhotoUrl.value,
                     callRoomId = roomId,
-                    callType = if (isVideo) "VIDEO" else "AUDIO",
+                    callType = type,
                     callStatus = "STARTING",
                     isCall = true
                 )
 
                 db.child("call_notifications").child(target).setValue(msg)
-                db.child(messagePath(me, target, isGroup)).child(msgId).setValue(msg)
+                db.child(messagePath(me, target)).child(msgId).setValue(msg)
+
             } catch (e: Exception) {
                 logE("Erro ao iniciar chamada: ${e.message}", e)
             }
         }
     }
+
 
     fun togglePinChat(friendId: String, currentStatus: Boolean) {
         val me = safeMe()
@@ -1556,5 +1732,113 @@ class ChatViewModel : ViewModel() {
         val me = safeMe()
         if (me.isEmpty()) return
         db.child("chats").child(me).child(friendId).child("isMuted").setValue(!currentStatus)
+    }
+
+    fun clearCallHistory() {
+        val me = safeMe()
+        if (me.isEmpty()) return
+        db.child("call_logs").child(me).removeValue()
+    }
+
+    fun deleteCallLog(logId: String) {
+        val me = safeMe()
+        if (me.isEmpty()) return
+        db.child("call_logs").child(me).child(logId).removeValue()
+    }
+
+    fun fetchLocalMedia(context: Context) {
+        viewModelScope.launch(Dispatchers.IO + errorHandler) {
+            val mediaList = mutableListOf<LocalMedia>()
+
+            val projection = arrayOf(
+                MediaStore.Files.FileColumns._ID,
+                MediaStore.Files.FileColumns.MEDIA_TYPE,
+                MediaStore.Files.FileColumns.DURATION,
+                MediaStore.Files.FileColumns.DATE_ADDED
+            )
+
+            val selection = (MediaStore.Files.FileColumns.MEDIA_TYPE + "="
+                    + MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE
+                    + " OR "
+                    + MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO + "="
+                    + MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO)
+
+            val queryUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
+            } else {
+                MediaStore.Files.getContentUri("external")
+            }
+
+            context.contentResolver.query(
+                queryUri,
+                projection,
+                selection,
+                null,
+                "${MediaStore.Files.FileColumns.DATE_ADDED} DESC"
+            )?.use { cursor ->
+                val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
+                val typeColumn = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.MEDIA_TYPE)
+                val durationColumn = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DURATION)
+                val dateColumn = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DATE_ADDED)
+
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(idColumn)
+                    val type = cursor.getInt(typeColumn)
+                    val duration = cursor.getLong(durationColumn)
+                    val dateAdded = cursor.getLong(dateColumn)
+
+                    val contentUri = if (type == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO) {
+                        ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id)
+                    } else {
+                        ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                    }
+
+                    mediaList.add(
+                        LocalMedia(
+                            uri = contentUri,
+                            isVideo = type == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO,
+                            duration = duration,
+                            dateAdded = dateAdded
+                        )
+                    )
+                }
+            }
+            withContext(Dispatchers.Main) {
+                _localMedia.value = mediaList
+            }
+        }
+    }
+
+    // Métodos para lidar com compartilhamento externo
+    fun setPendingShare(text: String?, uris: List<Uri>) {
+        _pendingSharedText.value = text
+        _pendingSharedMedia.value = uris
+    }
+
+    fun clearPendingShare() {
+        _pendingSharedText.value = null
+        _pendingSharedMedia.value = emptyList()
+    }
+
+    fun sendPendingShare(targetId: String, tempDuration: Int = 0) {
+        val text = _pendingSharedText.value
+        val media = _pendingSharedMedia.value
+
+        setTargetId(targetId)
+
+        viewModelScope.launch {
+            if (!text.isNullOrBlank()) {
+                sendMessage(text, tempDuration)
+            }
+            media.forEach { uri ->
+                val mime = FriendApplication.instance.contentResolver.getType(uri)
+                if (mime?.startsWith("video") == true) {
+                    uploadVideo(uri, tempDuration)
+                } else {
+                    uploadImage(uri, tempDuration)
+                }
+            }
+            clearPendingShare()
+        }
     }
 }

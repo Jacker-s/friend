@@ -12,8 +12,8 @@ android {
         applicationId = "com.jack.friend"
         minSdk = 24
         targetSdk = 35
-        versionCode = 12
-        versionName = "1.3"
+        versionCode = 18
+        versionName = "1.6"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -55,7 +55,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
-    implementation("androidx.compose.material3:material3:1.1.x")
+
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
@@ -81,6 +81,7 @@ dependencies {
 
     // Image Loading
     implementation(libs.coil.compose)
+    implementation("io.coil-kt:coil-video:2.5.0")
 
     // Lottie for Animated Emojis
     implementation(libs.lottie.compose)
@@ -92,6 +93,26 @@ dependencies {
     implementation("io.github.webrtc-sdk:android:125.6422.06")
     implementation(libs.androidx.compose.animation.core)
     implementation(libs.androidx.compose.ui.unit)
+    implementation(libs.androidx.material3)
+
+    // In-App Updates
+    implementation("com.google.android.play:app-update-ktx:2.1.0")
+
+    // Video Player (Media3)
+    implementation("androidx.media3:media3-exoplayer:1.5.1")
+    implementation("androidx.media3:media3-ui:1.5.1")
+
+    // CameraX
+    val camerax_version = "1.4.1"
+    implementation("androidx.camera:camera-core:$camerax_version")
+    implementation("androidx.camera:camera-camera2:$camerax_version")
+    implementation("androidx.camera:camera-lifecycle:$camerax_version")
+    implementation("androidx.camera:camera-video:$camerax_version")
+    implementation("androidx.camera:camera-view:$camerax_version")
+    implementation("androidx.camera:camera-extensions:$camerax_version")
+
+    // Jsoup for Link Preview
+    implementation(libs.jsoup)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

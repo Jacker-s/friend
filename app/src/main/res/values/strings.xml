@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Wappi</string>
+    <string name="app_name">Wappi Messenger</string>
     <string name="default_web_client_id">135221802523-fl381le8p7cf5agsshqtps78cal57427.apps.googleusercontent.com</string>
 
     <!-- Navigation & Tabs -->

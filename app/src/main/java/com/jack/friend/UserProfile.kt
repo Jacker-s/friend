@@ -40,12 +40,21 @@ data class UserProfile(
     var showLastSeen: Boolean = true,
     var showReadReceipts: Boolean = true,
     var showOnlineStatus: Boolean = true,
+
+    @get:PropertyName("isHiddenFromSearch")
+    @set:PropertyName("isHiddenFromSearch")
     var isHiddenFromSearch: Boolean = false,
 
     /**
      * Todos, Contatos
      */
-    var allowAddGroups: String = "Todos"
+    var allowAddGroups: String = "Todos",
+
+    // =========================
+    // Mensagem de solicitação
+    // =========================
+    var pendingMessageRequests: MutableMap<String, Long> = mutableMapOf(),
+    var acceptedContacts: MutableMap<String, Long> = mutableMapOf()
 
 ) {
 

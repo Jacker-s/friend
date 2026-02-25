@@ -17,7 +17,6 @@ class ReplyReceiver : BroadcastReceiver() {
         if (remoteInput != null) {
             val replyText = remoteInput.getCharSequence(FriendMessagingService.KEY_TEXT_REPLY)?.toString()
             val chatId = intent.getStringExtra("chatId") ?: return
-            val isGroup = intent.getBooleanExtra("isGroup", false)
             val myUsername = intent.getStringExtra("senderName") ?: ""
 
             Log.d(TAG, "Resposta recebida: $replyText para $chatId")
@@ -32,10 +31,10 @@ class ReplyReceiver : BroadcastReceiver() {
                     receiverId = chatId,
                     text = replyText,
                     timestamp = System.currentTimeMillis(),
-                    isGroup = isGroup
+                    isGroup = false
                 )
 
-                val path = if (isGroup) "group_messages/$chatId" else "messages/${chatPathFor(myUsername, chatId)}"
+                val path = "messages/${chatPathFor(myUsername, chatId)}"
                 
                 db.child(path).child(msgId).setValue(msg).addOnSuccessListener {
                     Log.d(TAG, "Mensagem enviada via notificação com sucesso")
@@ -62,52 +61,32 @@ class ReplyReceiver : BroadcastReceiver() {
     private fun updateChatSummary(msg: Message, me: String) {
         val db = FirebaseDatabase.getInstance().reference
         val friend = msg.receiverId
-        val isGroup = msg.isGroup
 
-        if (isGroup) {
-            db.child("groups").child(friend).get().addOnSuccessListener { snapshot ->
-                val group = snapshot.getValue(Group::class.java) ?: return@addOnSuccessListener
-                val summary = ChatSummary(
-                    friendId = friend,
-                    lastMessage = "${msg.senderName ?: me}: ${msg.text}",
-                    timestamp = msg.timestamp,
-                    lastSenderId = me,
-                    friendName = group.name,
-                    friendPhotoUrl = group.photoUrl,
-                    isGroup = true,
-                    hasUnread = false
-                )
-                group.members.keys.forEach { memberUsername ->
-                    db.child("chats").child(memberUsername).child(friend).setValue(summary.copy(hasUnread = memberUsername != me))
-                }
-            }
-        } else {
-            db.child("users").child(friend).get().addOnSuccessListener { snapshot ->
-                val friendProf = snapshot.getValue(UserProfile::class.java)
-                val summary = ChatSummary(
-                    friendId = friend,
-                    lastMessage = msg.text,
-                    timestamp = msg.timestamp,
-                    lastSenderId = me,
-                    friendName = friendProf?.name ?: friend,
-                    friendPhotoUrl = friendProf?.photoUrl,
-                    isGroup = false,
-                    isOnline = friendProf?.isOnline ?: false,
-                    hasUnread = false,
-                    presenceStatus = friendProf?.presenceStatus ?: "Online"
-                )
-                db.child("chats").child(me).child(friend).setValue(summary)
-                
-                db.child("users").child(me).get().addOnSuccessListener { meSnapshot ->
-                    val meProf = meSnapshot.getValue(UserProfile::class.java)
-                    db.child("chats").child(friend).child(me).setValue(summary.copy(
-                        friendId = me,
-                        friendName = meProf?.name ?: me,
-                        friendPhotoUrl = meProf?.photoUrl,
-                        hasUnread = true,
-                        presenceStatus = meProf?.presenceStatus ?: "Online"
-                    ))
-                }
+        db.child("users").child(friend).get().addOnSuccessListener { snapshot ->
+            val friendProf = snapshot.getValue(UserProfile::class.java)
+            val summary = ChatSummary(
+                friendId = friend,
+                lastMessage = msg.text,
+                timestamp = msg.timestamp,
+                lastSenderId = me,
+                friendName = friendProf?.name ?: friend,
+                friendPhotoUrl = friendProf?.photoUrl,
+                isGroup = false,
+                isOnline = friendProf?.isOnline ?: false,
+                hasUnread = false,
+                presenceStatus = friendProf?.presenceStatus ?: "Online"
+            )
+            db.child("chats").child(me).child(friend).setValue(summary)
+            
+            db.child("users").child(me).get().addOnSuccessListener { meSnapshot ->
+                val meProf = meSnapshot.getValue(UserProfile::class.java)
+                db.child("chats").child(friend).child(me).setValue(summary.copy(
+                    friendId = me,
+                    friendName = meProf?.name ?: me,
+                    friendPhotoUrl = meProf?.photoUrl,
+                    hasUnread = true,
+                    presenceStatus = meProf?.presenceStatus ?: "Online"
+                ))
             }
         }
     }

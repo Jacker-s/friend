@@ -44,6 +44,10 @@ data class ChatSummary(
     @set:PropertyName("isGroup")
     var isGroup: Boolean = false,
 
+    @get:PropertyName("isAccepted")
+    @set:PropertyName("isAccepted")
+    var isAccepted: Boolean = true,
+
     var presenceStatus: String = "Online"
 )
 
@@ -58,21 +62,12 @@ data class UserStatus(
     var lastActive: Long = 0L,
     var username: String = "",
     var imageUrl: String = "",
+    var videoUrl: String? = null,
+    var isVideo: Boolean = false,
     var timestamp: Long = 0L,
     var userPhotoUrl: String? = null,
     var id: String = "",
     var viewers: Map<String, Long> = emptyMap() // userId -> timestamp
-)
-
-@IgnoreExtraProperties
-data class Group(
-    var id: String = "",
-    var name: String = "",
-    var photoUrl: String? = null,
-    var description: String = "",
-    var members: Map<String, Boolean> = emptyMap(), // username -> true
-    var createdBy: String = "",
-    var timestamp: Long = 0L
 )
 
 // =========================
@@ -97,12 +92,3 @@ fun UserStatus.hasViewed(userId: String): Boolean = viewers.containsKey(userId)
 
 val UserStatus.isExpired: Boolean
     get() = System.currentTimeMillis() - timestamp > 86_400_000L // 24h
-
-// Group helpers
-val Group.memberCount: Int
-    get() = members.size
-
-fun Group.isMember(username: String): Boolean = members.containsKey(username)
-
-val Group.hasPhoto: Boolean
-    get() = !photoUrl.isNullOrBlank()

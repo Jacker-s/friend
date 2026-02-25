@@ -2,12 +2,17 @@ package com.jack.friend
 
 import android.app.Activity
 import android.app.Application
+import android.content.Context
 import android.os.Bundle
 import com.cloudinary.android.MediaManager
+import coil.ImageLoader
+import coil.ImageLoaderFactory
+import coil.decode.VideoFrameDecoder
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import java.io.File
 
-class FriendApplication : Application(), Application.ActivityLifecycleCallbacks {
+class FriendApplication : Application(), Application.ActivityLifecycleCallbacks, ImageLoaderFactory {
     
     private var activityCount = 0
     private val _isForeground = MutableStateFlow(false)
@@ -31,6 +36,34 @@ class FriendApplication : Application(), Application.ActivityLifecycleCallbacks 
             "api_secret" to "CKubGcQuYFyGat2n5I0Q0eZi-QQ"
         )
         MediaManager.init(this, config)
+    }
+
+    fun clearAppData() {
+        try {
+            // Limpa SharedPreferences conhecidas
+            val prefs = listOf("friend_prefs", "security_prefs", "ui_prefs", "recent_emojis_prefs")
+            prefs.forEach { name ->
+                getSharedPreferences(name, Context.MODE_PRIVATE).edit().clear().apply()
+            }
+
+            // Limpa Cache (arquivos de áudio, imagens temporárias)
+            cacheDir.deleteRecursively()
+            
+            // Limpa arquivos internos se houver
+            filesDir.deleteRecursively()
+            
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    override fun newImageLoader(): ImageLoader {
+        return ImageLoader.Builder(this)
+            .components {
+                add(VideoFrameDecoder.Factory())
+            }
+            .crossfade(true)
+            .build()
     }
 
     override fun onActivityStarted(activity: Activity) {
