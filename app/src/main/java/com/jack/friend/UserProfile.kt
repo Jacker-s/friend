@@ -45,6 +45,10 @@ data class UserProfile(
     @set:PropertyName("isHiddenFromSearch")
     var isHiddenFromSearch: Boolean = false,
 
+    @get:PropertyName("isScreenshotDisabled")
+    @set:PropertyName("isScreenshotDisabled")
+    var isScreenshotDisabled: Boolean = false, // ✅ Nova configuração de privacidade
+
     /**
      * Todos, Contatos
      */
@@ -68,7 +72,7 @@ data class UserProfile(
 
     @get:Exclude
     val hasPhoto: Boolean
-        get() = !photoUrl.isNullOrBlank()
+        get() = !photoUrl.isNullOrEmpty()
 
     /**
      * Se o usuário escolheu "Invisível", considere que não deve aparecer online.

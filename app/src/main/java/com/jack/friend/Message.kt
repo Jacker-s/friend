@@ -33,6 +33,7 @@ data class Message(
     var videoThumbnailUrl: String? = null,
     var audioUrl: String? = null,
     var stickerUrl: String? = null,
+    var audioDurationSeconds: Long? = null, // ✅ Duração do áudio
 
     // Campo genérico de mídia (fallback futuro)
     var isMedia: Boolean = false,
@@ -90,6 +91,7 @@ data class Message(
     // Expiração (mensagem temporária)
     // =========================
     var expiryTime: Long? = null,
+    var tempDurationMillis: Long? = null,
 
     // =========================
     // Local-only (não vai para o Firebase)

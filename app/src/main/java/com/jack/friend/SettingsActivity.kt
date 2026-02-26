@@ -71,6 +71,9 @@ class SettingsActivity : ComponentActivity() {
                 val myStatus by viewModel.myStatus.collectAsStateWithLifecycle("")
                 val blockedProfiles by viewModel.blockedProfiles.collectAsStateWithLifecycle(emptyList())
                 val isHiddenFromSearch by viewModel.isHiddenFromSearch.collectAsStateWithLifecycle(false)
+                val showLastSeen by viewModel.showLastSeen.collectAsStateWithLifecycle(true)
+                val showReadReceipts by viewModel.showReadReceipts.collectAsStateWithLifecycle(true)
+                val showOnlineStatus by viewModel.showOnlineStatus.collectAsStateWithLifecycle(true)
 
                 val securityPrefs = remember { context.getSharedPreferences("security_prefs", MODE_PRIVATE) }
 
@@ -83,6 +86,7 @@ class SettingsActivity : ComponentActivity() {
                 var isDeletingAccount by remember { mutableStateOf(false) }
                 var showBlockedDialog by remember { mutableStateOf(false) }
                 var showThemePicker by remember { mutableStateOf(false) }
+                var showClearCacheDialog by remember { mutableStateOf(false) }
 
                 val themeSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -146,6 +150,33 @@ class SettingsActivity : ComponentActivity() {
 
                         Text("PRIVACIDADE", modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp), style = MaterialTheme.typography.labelSmall, color = WarmPrimary, fontWeight = FontWeight.Bold)
                         MetaSettingsSection {
+                            MetaSettingsSwitchItem(
+                                icon = Icons.Default.Timer,
+                                iconColor = iOSBlue,
+                                title = "Visto por Último",
+                                subtitle = "Mostra quando você esteve online pela última vez",
+                                checked = showLastSeen,
+                                onCheckedChange = { viewModel.updateProfile(privacySettings = mapOf("showLastSeen" to it)) }
+                            )
+                            MetaSettingsDivider()
+                            MetaSettingsSwitchItem(
+                                icon = Icons.Default.DoneAll,
+                                iconColor = iOSBlue,
+                                title = "Confirmações de Leitura",
+                                subtitle = "Permite que outros vejam quando você leu as mensagens",
+                                checked = showReadReceipts,
+                                onCheckedChange = { viewModel.updateProfile(privacySettings = mapOf("showReadReceipts" to it)) }
+                            )
+                            MetaSettingsDivider()
+                            MetaSettingsSwitchItem(
+                                icon = Icons.Default.OnlinePrediction,
+                                iconColor = iOSGreen,
+                                title = "Status Online",
+                                subtitle = "Mostra quando você está online no momento",
+                                checked = showOnlineStatus,
+                                onCheckedChange = { viewModel.updateProfile(privacySettings = mapOf("showOnlineStatus" to it)) }
+                            )
+                            MetaSettingsDivider()
                             MetaSettingsItem(title = "Usuários Bloqueados", icon = Icons.Default.Block, iconColor = MessengerBusy, onClick = { showBlockedDialog = true })
                             MetaSettingsDivider()
                             MetaSettingsSwitchItem(
@@ -175,6 +206,17 @@ class SettingsActivity : ComponentActivity() {
                                     }, colors = SwitchDefaults.colors(checkedTrackColor = WarmPrimary))
                                 })
                             }
+                        }
+
+                        Text("DADOS E ARMAZENAMENTO", modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp), style = MaterialTheme.typography.labelSmall, color = WarmPrimary, fontWeight = FontWeight.Bold)
+                        MetaSettingsSection {
+                            MetaSettingsItem(
+                                title = "Limpar Cache",
+                                icon = Icons.Default.CleaningServices,
+                                iconColor = iOSOrange,
+                                subtitle = "Libera espaço apagando mídias temporárias",
+                                onClick = { showClearCacheDialog = true }
+                            )
                         }
 
                         Text("CONTA", modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp), style = MaterialTheme.typography.labelSmall, color = WarmPrimary, fontWeight = FontWeight.Bold)
@@ -319,6 +361,24 @@ class SettingsActivity : ComponentActivity() {
                             showPinDialog = false
                             pinInput = ""
                         } }) { Text("Definir") } }
+                    )
+                }
+
+                if (showClearCacheDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showClearCacheDialog = false },
+                        title = { Text("Limpar Cache?") },
+                        text = { Text("Isso apagará arquivos temporários e mídias baixadas. Suas mensagens permanecerão seguras.") },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                (context.applicationContext as? FriendApplication)?.clearAppData()
+                                Toast.makeText(context, "Cache limpo com sucesso!", Toast.LENGTH_SHORT).show()
+                                showClearCacheDialog = false
+                            }) { Text("Limpar") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showClearCacheDialog = false }) { Text("Cancelar") }
+                        }
                     )
                 }
             }

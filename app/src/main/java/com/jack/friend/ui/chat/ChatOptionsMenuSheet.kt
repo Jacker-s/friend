@@ -43,7 +43,7 @@ import com.jack.friend.ui.theme.iOSRed
 fun ChatOptionsMenuSheet(
     isMuted: Boolean,
     isPinned: Boolean,
-    tempMessageDuration: Int,
+    tempMessageDuration: Long,
     isBlocked: Boolean,
     onDismiss: () -> Unit,
     onViewInfo: () -> Unit,
@@ -51,9 +51,16 @@ fun ChatOptionsMenuSheet(
     onTogglePin: () -> Unit,
     onToggleTempMessages: () -> Unit,
     onClearChat: () -> Unit,
-    onBlockToggle: () -> Unit,
+    onBlockToggle: () -> Unit
 ) {
     val colors = LocalChatColors.current
+    val durationText = when {
+        tempMessageDuration <= 0 -> "Off"
+        tempMessageDuration < 60_000 -> "${tempMessageDuration / 1000}s"
+        tempMessageDuration < 3_600_000 -> "${tempMessageDuration / 60_000}m"
+        else -> "${tempMessageDuration / 3_600_000}h"
+    }
+
     Column(
         modifier = Modifier
             .background(colors.secondaryBackground)
@@ -93,7 +100,7 @@ fun ChatOptionsMenuSheet(
         SheetOption(
             icon = Icons.Rounded.Timer,
             text = "Mensagens Temporárias",
-            trailingText = if (tempMessageDuration > 0) "${tempMessageDuration}h" else "Off",
+            trailingText = durationText,
             onClick = { onDismiss(); onToggleTempMessages() }
         )
 

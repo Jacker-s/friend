@@ -1,6 +1,10 @@
 package com.jack.friend.ui.chat
 
+import android.app.Activity
+import android.app.NotificationManager
+import android.content.Context
 import android.content.Intent
+import android.view.WindowManager
 import android.widget.Toast
 import android.net.Uri
 import androidx.activity.compose.BackHandler
@@ -51,6 +55,19 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
+/**
+ * Main screen for the chat functionality, handling both the conversation list and individual chat sessions.
+ *
+ * This composable manages various states including:
+ * - Message history and real-time updates.
+ * - User search and contact management.
+ * - Media attachments (images, videos, stickers).
+ * - Status viewing and uploading.
+ * - Call initiation (audio/video).
+ * - Privacy features like temporary messages.
+ *
+ * @param viewModel The [ChatViewModel] that provides data and handles business logic for the chat.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(viewModel: ChatViewModel) {
@@ -67,6 +84,7 @@ fun ChatScreen(viewModel: ChatViewModel) {
     val contacts by viewModel.contacts.collectAsStateWithLifecycle(emptyList())
     val recordingDuration by viewModel.recordingDuration.collectAsStateWithLifecycle(0L)
     val pinnedMessage by viewModel.pinnedMessage.collectAsStateWithLifecycle(null)
+    val showReadReceipts by viewModel.showReadReceipts.collectAsStateWithLifecycle(true)
 
     // External sharing
     val pendingSharedMedia by viewModel.pendingSharedMedia.collectAsStateWithLifecycle()
@@ -88,7 +106,8 @@ fun ChatScreen(viewModel: ChatViewModel) {
     var showOptionsMenu by remember { mutableStateOf(false) }
     var showEmojiPicker by remember { mutableStateOf(false) }
     var showStickerPicker by remember { mutableStateOf(false) }
-    var tempMessageDuration by remember { mutableIntStateOf(0) }
+    var tempMessageDuration by remember { mutableLongStateOf(0L) }
+    var showTempMessageSelector by remember { mutableStateOf(false) }
     var showClearChatDialog by remember { mutableStateOf(false) }
     var showAddContactDialog by remember { mutableStateOf(false) }
     var showChatInfo by remember { mutableStateOf(false) }
@@ -106,13 +125,39 @@ fun ChatScreen(viewModel: ChatViewModel) {
         derivedStateOf { if (selectedFilter == "Não Lidas") activeChats.filter { it.hasUnread } else activeChats }
     }
 
-    LaunchedEffect(messages.size) { if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1) }
+    // Ensure screenshots are always allowed
+    LaunchedEffect(Unit) {
+        val activity = context as? Activity ?: return@LaunchedEffect
+        activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+    }
+
+    LaunchedEffect(messages.size) { 
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.size - 1) 
+            // Se a conversa está aberta e chegou mensagem, marca como lida
+            if (targetId.isNotEmpty()) {
+                viewModel.markAsRead()
+            }
+        }
+    }
+
     LaunchedEffect(targetId) {
         if (targetId.isNotEmpty()) {
             viewModel.markAsRead()
             FriendApplication.currentOpenedChatId = targetId
+            // Remove a notificação da barra de status ao abrir a conversa
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.cancel(targetId.hashCode())
         } else {
             FriendApplication.currentOpenedChatId = "LISTA_CONVERSAS"
+        }
+    }
+
+    // Sincronizar duração das mensagens temporárias com o chat ativo
+    LaunchedEffect(targetId, activeChats) {
+        if (targetId.isNotEmpty()) {
+            val currentChat = activeChats.find { it.friendId == targetId }
+            tempMessageDuration = currentChat?.tempDuration ?: 0L
         }
     }
 
@@ -135,8 +180,9 @@ fun ChatScreen(viewModel: ChatViewModel) {
         })
     }
 
-    BackHandler(enabled = targetId.isNotEmpty() || isSearching || mediaViewerItem != null || currentBottomRoute != BottomBarScreen.Home.route || viewingStatuses != null || showEmojiPicker || showStickerPicker || showChatInfo || showInAppCamera || showModernGallery || showAttachmentMenu || searchingUserProfile != null) {
+    BackHandler(enabled = targetId.isNotEmpty() || isSearching || mediaViewerItem != null || currentBottomRoute != BottomBarScreen.Home.route || viewingStatuses != null || showEmojiPicker || showStickerPicker || showChatInfo || showInAppCamera || showModernGallery || showAttachmentMenu || searchingUserProfile != null || showTempMessageSelector) {
         when {
+            showTempMessageSelector -> showTempMessageSelector = false
             searchingUserProfile != null -> searchingUserProfile = null
             showInAppCamera -> showInAppCamera = false
             showModernGallery -> showModernGallery = false
@@ -267,11 +313,13 @@ fun ChatScreen(viewModel: ChatViewModel) {
                 targetId.isNotEmpty() -> {
                     MessageListContent(
                         messages = messages, listState = listState, myUsername = myUsername, targetProfile = targetProfileState,
+                        showReadReceipts = showReadReceipts,
                         onImageClick = { url -> mediaViewerItem = MediaViewerItem.Image(url) },
                         onVideoClick = { url -> mediaViewerItem = MediaViewerItem.Video(url) },
                         onDelete = { m -> viewModel.deleteMessage(m.id, if (m.senderId == myUsername) m.receiverId else m.senderId) },
                         onReply = { m -> replyingTo = m }, onReact = { m, e -> viewModel.addReaction(m, e) },
-                        onEdit = { m -> editingMessage = m; textState = m.text }, onPin = { m -> viewModel.pinMessage(m) }
+                        onEdit = { m -> editingMessage = m; textState = m.text }, onPin = { m -> viewModel.pinMessage(m) },
+                        onAudioPlayed = { m -> viewModel.markAudioAsPlayed(m.id) }
                     )
 
                     val targetProfile = targetProfileState
@@ -311,9 +359,26 @@ fun ChatScreen(viewModel: ChatViewModel) {
                                 onViewInfo = { showChatInfo = true },
                                 onToggleMute = { viewModel.toggleMuteChat(targetId, currentChat?.isMuted ?: false) },
                                 onTogglePin = { viewModel.togglePinChat(targetId, currentChat?.isPinned ?: false) },
-                                onToggleTempMessages = { tempMessageDuration = if (tempMessageDuration == 0) 24 else 0 },
+                                onToggleTempMessages = { showTempMessageSelector = true },
                                 onClearChat = { showClearChatDialog = true },
                                 onBlockToggle = { if (blockedUsers.contains(targetId)) viewModel.unblockUser(targetId) else viewModel.blockUser(targetId) }
+                            )
+                        }
+                    }
+
+                    if (showTempMessageSelector) {
+                        ModalBottomSheet(
+                            onDismissRequest = { showTempMessageSelector = false },
+                            containerColor = LocalChatColors.current.secondaryBackground,
+                            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+                        ) {
+                            TempMessageSelectorSheet(
+                                currentDuration = tempMessageDuration,
+                                onSelect = {
+                                    viewModel.setTempMessageDuration(targetId, it)
+                                    tempMessageDuration = it
+                                    showTempMessageSelector = false
+                                }
                             )
                         }
                     }
@@ -366,7 +431,7 @@ fun ChatScreen(viewModel: ChatViewModel) {
                 }
             }
 
-            if (showAttachmentMenu) MediaAttachmentSheet(viewModel = viewModel, onDismiss = { showAttachmentMenu = false }, onOpenCamera = { showInAppCamera = true }, onOpenGallery = { showModernGallery = true }, onOpenFile = { }, onMediaSelected = { uri, isV -> if (isV) viewModel.uploadVideo(uri, tempMessageDuration) else viewModel.uploadImage(uri, tempMessageDuration) })
+            if (showAttachmentMenu) MediaAttachmentSheet(viewModel = viewModel, onDismiss = { showAttachmentMenu = false }, onOpenCamera = { showInAppCamera = true }, onOpenGallery = { showModernGallery = true }, onMediaSelected = { uri, isV -> if (isV) viewModel.uploadVideo(uri, tempMessageDuration) else viewModel.uploadImage(uri, tempMessageDuration) }, onOpenFile = { })
             if (showInAppCamera) Box(modifier = Modifier.fillMaxSize().zIndex(10f)) { InAppCameraView(onDismiss = { showInAppCamera = false }, onPhotoCaptured = { uri -> viewModel.uploadImage(uri, tempMessageDuration) }, onVideoCaptured = { uri -> viewModel.uploadVideo(uri, tempMessageDuration) }) }
             if (showModernGallery) Box(modifier = Modifier.fillMaxSize().zIndex(10f)) { ModernGalleryPicker(viewModel = viewModel, onDismiss = { showModernGallery = false }, onSend = { uris -> uris.forEach { u -> viewModel.uploadImage(u, tempMessageDuration) } }) }
 
@@ -476,6 +541,15 @@ fun ChatScreen(viewModel: ChatViewModel) {
     }
 }
 
+/**
+ * A full-screen viewer for user statuses (similar to stories), supporting progress indicators and navigation.
+ *
+ * @param userStatuses List of statuses to be displayed for a specific user.
+ * @param myUsername The username of the current user, used to determine if they can see viewer info or delete.
+ * @param viewModel The [ChatViewModel] to handle status-related actions like marking as viewed or deleting.
+ * @param onClose Callback to be invoked when the viewer is closed.
+ * @param onDelete Callback to be invoked when a status is deleted.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StatusViewer(
@@ -579,6 +653,13 @@ fun StatusViewer(
     }
 }
 
+/**
+ * A specialized player for video statuses using ExoPlayer.
+ *
+ * @param url The URL of the video to play.
+ * @param onComplete Callback invoked when the video playback finishes.
+ * @param isPaused Whether the video playback should be currently paused.
+ */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 fun VideoStatusPlayer(url: String, onComplete: () -> Unit, isPaused: Boolean) {
@@ -603,7 +684,6 @@ fun VideoStatusPlayer(url: String, onComplete: () -> Unit, isPaused: Boolean) {
         }
         exoPlayer.addListener(listener)
         onDispose {
-            exoPlayer.removeListener(listener)
             exoPlayer.release()
         }
     }
@@ -620,6 +700,19 @@ fun VideoStatusPlayer(url: String, onComplete: () -> Unit, isPaused: Boolean) {
     )
 }
 
+/**
+ * A pop-up dialog menu providing quick actions for a specific chat from the chat list.
+ *
+ * @param summary The summary information of the selected chat.
+ * @param isBlocked Whether the friend in this chat is currently blocked.
+ * @param onDismiss Callback to close the menu.
+ * @param onOpen Callback to open the full conversation.
+ * @param onClear Callback to clear the message history for this chat.
+ * @param onDelete Callback to delete the chat entry.
+ * @param onBlockToggle Callback to toggle the block status of the user.
+ * @param onTogglePin Callback to toggle the pinned status of the chat.
+ * @param onToggleMute Callback to toggle the mute status of the chat.
+ */
 @Composable
 fun ChatPopUpMenu(
     summary: ChatSummary,
@@ -734,6 +827,15 @@ fun ChatPopUpMenu(
     }
 }
 
+/**
+ * A single menu item within the [ChatPopUpMenu].
+ *
+ * @param text The display text for the option.
+ * @param icon The icon representing the action.
+ * @param onClick The action to perform when the item is clicked.
+ * @param textColor Optional color for the text (e.g., red for destructive actions).
+ * @param iconColor Optional color for the icon.
+ */
 @Composable
 fun ChatPopOptionItem(
     text: String,
@@ -763,5 +865,63 @@ fun ChatPopOptionItem(
             fontWeight = FontWeight.Medium,
             fontSize = 16.sp
         )
+    }
+}
+
+@Composable
+fun TempMessageSelectorSheet(
+    currentDuration: Long,
+    onSelect: (Long) -> Unit
+) {
+    val chatColors = LocalChatColors.current
+    val options = listOf(
+        0L to "Desativado",
+        15000L to "15 segundos",
+        30000L to "30 segundos",
+        60000L to "60 segundos",
+        300000L to "5 minutos",
+        600000L to "10 minutos",
+        1800000L to "30 minutos",
+        86400000L to "24 horas"
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(bottom = 16.dp)
+    ) {
+        Text(
+            text = "Mensagens Temporárias",
+            modifier = Modifier.padding(16.dp),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = chatColors.textPrimary
+        )
+
+        options.forEach { (duration, label) ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onSelect(duration) }
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = label,
+                    modifier = Modifier.weight(1f),
+                    color = chatColors.textPrimary,
+                    fontSize = 16.sp
+                )
+                if (currentDuration == duration) {
+                    Icon(
+                        imageVector = Icons.Rounded.Check,
+                        contentDescription = "Selecionado",
+                        tint = MessengerBlue,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+        }
     }
 }

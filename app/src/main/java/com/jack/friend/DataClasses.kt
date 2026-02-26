@@ -40,6 +40,12 @@ data class ChatSummary(
     @set:PropertyName("isEphemeral")
     var isEphemeral: Boolean = false,
 
+    var tempDuration: Long = 0L, // ✅ Duração das mensagens temporárias
+
+    @get:PropertyName("isScreenshotDisabled")
+    @set:PropertyName("isScreenshotDisabled")
+    var isScreenshotDisabled: Boolean = false, // ✅ Nova configuração por chat
+
     @get:PropertyName("isGroup")
     @set:PropertyName("isGroup")
     var isGroup: Boolean = false,

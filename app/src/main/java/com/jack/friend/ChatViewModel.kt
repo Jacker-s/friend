@@ -2,6 +2,7 @@ package com.jack.friend
 
 import android.content.ContentUris
 import android.content.Context
+import android.media.MediaMetadataRetriever
 import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
@@ -155,6 +156,9 @@ class ChatViewModel : ViewModel() {
     private val _isHiddenFromSearch = MutableStateFlow(false)
     val isHiddenFromSearch: StateFlow<Boolean> = _isHiddenFromSearch
 
+    private val _isScreenshotDisabled = MutableStateFlow(false)
+    val isScreenshotDisabled: StateFlow<Boolean> = _isScreenshotDisabled
+
     private val _messages = MutableStateFlow<List<Message>>(emptyList())
     val messages: StateFlow<List<Message>> = _messages
 
@@ -215,6 +219,7 @@ class ChatViewModel : ViewModel() {
 
     private var searchJob: Job? = null
     private var presenceJob: Job? = null
+    private var ephemeralCleanupJob: Job? = null
     private var connectedListener: ValueEventListener? = null
 
     private var mediaRecorder: MediaRecorder? = null
@@ -410,6 +415,7 @@ class ChatViewModel : ViewModel() {
         _showReadReceipts.value = true
         _showOnlineStatus.value = true
         _isHiddenFromSearch.value = false
+        _isScreenshotDisabled.value = false
         _contacts.value = emptyList()
         _searchResults.value = emptyList()
         _statuses.value = emptyList()
@@ -456,6 +462,8 @@ class ChatViewModel : ViewModel() {
         connectedListener = null
         presenceJob?.cancel()
         presenceJob = null
+        ephemeralCleanupJob?.cancel()
+        ephemeralCleanupJob = null
 
         stopTimer()
         releaseRecorderSafely()
@@ -491,6 +499,8 @@ class ChatViewModel : ViewModel() {
         }
         messagesListener = null
         currentChatPath = null
+        ephemeralCleanupJob?.cancel()
+        ephemeralCleanupJob = null
 
         _targetId.value = id
 
@@ -499,6 +509,7 @@ class ChatViewModel : ViewModel() {
             _messages.value = emptyList()
             _isTargetTyping.value = false
             _pinnedMessage.value = null
+            _isScreenshotDisabled.value = false
             return
         }
 
@@ -522,6 +533,14 @@ class ChatViewModel : ViewModel() {
             override fun onCancelled(error: DatabaseError) {}
         }
         db.child("users").child(id).addValueEventListener(targetProfileListener!!)
+
+        // Monitorar Screenshot Disabled do outro lado
+        db.child("chats").child(id).child(me).child("isScreenshotDisabled").addValueEventListener(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                _isScreenshotDisabled.value = snapshot.getValue(Boolean::class.java) ?: false
+            }
+            override fun onCancelled(error: DatabaseError) {}
+        })
 
         listenToMessages(id)
     }
@@ -599,7 +618,7 @@ class ChatViewModel : ViewModel() {
     // ---------------------------\\
     // Send message / sticker / reactions
     // ---------------------------\\
-    fun sendMessage(text: String, tempDurationHours: Int = 0, replyingTo: Message? = null) {
+    fun sendMessage(text: String, tempDurationMillis: Long = 0, replyingTo: Message? = null) {
         val me = safeMe()
         val target = safeTarget()
         if (me.isEmpty() || target.isEmpty()) return
@@ -620,7 +639,7 @@ class ChatViewModel : ViewModel() {
                 else if (replyingTo?.audioUrl != null) "🎤 Áudio"
                 else null,
             replyToName = replyingTo?.senderName ?: replyingTo?.senderId,
-            expiryTime = if (tempDurationHours > 0) System.currentTimeMillis() + (tempDurationHours * 3_600_000L) else null
+            tempDurationMillis = if (tempDurationMillis > 0) tempDurationMillis else null
         )
 
         // Verificação de link
@@ -743,12 +762,31 @@ class ChatViewModel : ViewModel() {
         db.child(path).orderByChild("receiverId").equalTo(me).get()
             .addOnSuccessListener { snapshot ->
                 snapshot.children.forEach {
-                    if (it.child("isRead").getValue(Boolean::class.java) != true) {
-                        it.ref.child("isRead").setValue(true)
+                    val isRead = it.child("isRead").getValue(Boolean::class.java) ?: false
+                    if (!isRead) {
+                        val updates = mutableMapOf<String, Any?>("isRead" to true)
+                        
+                        val tempDuration = it.child("tempDurationMillis").getValue(Long::class.java)
+                        val expiryTime = it.child("expiryTime").getValue(Long::class.java)
+                        
+                        if (tempDuration != null && tempDuration > 0 && expiryTime == null) {
+                            updates["expiryTime"] = System.currentTimeMillis() + tempDuration
+                        }
+                        
+                        it.ref.updateChildren(updates)
                     }
                 }
             }
         db.child("chats").child(me).child(target).child("hasUnread").setValue(false)
+    }
+
+    fun markAudioAsPlayed(messageId: String) {
+        val me = safeMe()
+        val target = safeTarget()
+        if (me.isEmpty() || target.isEmpty()) return
+
+        val path = "messages/${chatKey(me, target)}"
+        db.child(path).child(messageId).child("audioPlayed").setValue(true)
     }
 
     // ---------------------------\\
@@ -799,7 +837,7 @@ class ChatViewModel : ViewModel() {
         mediaRecorder = null
     }
 
-    fun stopRecording(tempDurationHours: Int = 0, cancel: Boolean = false) {
+    fun stopRecording(tempDurationMillis: Long = 0, cancel: Boolean = false) {
         stopTimer()
         val duration = System.currentTimeMillis() - recordingStartTime
 
@@ -812,7 +850,7 @@ class ChatViewModel : ViewModel() {
             return
         }
 
-        audioFile?.let { uploadAudio(it, tempDurationHours) }
+        audioFile?.let { uploadAudio(it, tempDurationMillis) }
     }
 
     private suspend fun uploadToCloudinary(uri: Uri, folder: String, resourceType: String = "auto"): String? =
@@ -836,13 +874,14 @@ class ChatViewModel : ViewModel() {
                 }).dispatch()
         }
 
-    private fun uploadAudio(file: File, tempDurationHours: Int) {
+    private fun uploadAudio(file: File, tempDurationMillis: Long) {
         val me = safeMe()
         val target = safeTarget()
         if (me.isEmpty() || target.isEmpty()) return
 
         viewModelScope.launch(errorHandler) {
             try {
+                val durationMs = getAudioDuration(file)
                 val audioRef = storage.child("audios/${UUID.randomUUID()}.m4a")
                 audioRef.putFile(Uri.fromFile(file)).await()
                 val url = audioRef.downloadUrl.await().toString()
@@ -853,10 +892,11 @@ class ChatViewModel : ViewModel() {
                     senderId = me,
                     receiverId = target,
                     audioUrl = url,
+                    audioDurationSeconds = durationMs / 1000,
                     timestamp = System.currentTimeMillis(),
                     isGroup = false,
                     senderName = _myName.value,
-                    expiryTime = if (tempDurationHours > 0) System.currentTimeMillis() + (tempDurationHours * 3_600_000L) else null
+                    tempDurationMillis = if (tempDurationMillis > 0) tempDurationMillis else null
                 )
                 msg.localAudioPath = file.absolutePath
                 sendMessageObject(msg)
@@ -866,7 +906,19 @@ class ChatViewModel : ViewModel() {
         }
     }
 
-    fun uploadImage(uri: Uri, tempDurationHours: Int = 0) {
+    private fun getAudioDuration(file: File): Long {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(file.absolutePath)
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLong() ?: 0L
+        } catch (e: Exception) {
+            0L
+        } finally {
+            retriever.release()
+        }
+    }
+
+    fun uploadImage(uri: Uri, tempDurationMillis: Long = 0) {
         val me = safeMe()
         val target = safeTarget()
         if (me.isEmpty() || target.isEmpty()) return
@@ -885,7 +937,7 @@ class ChatViewModel : ViewModel() {
                             timestamp = System.currentTimeMillis(),
                             isGroup = false,
                             senderName = _myName.value,
-                            expiryTime = if (tempDurationHours > 0) System.currentTimeMillis() + (tempDurationHours * 3_600_000L) else null
+                            tempDurationMillis = if (tempDurationMillis > 0) tempDurationMillis else null
                         )
                     )
                 }
@@ -895,7 +947,7 @@ class ChatViewModel : ViewModel() {
         }
     }
 
-    fun uploadVideo(uri: Uri, tempDurationHours: Int = 0) {
+    fun uploadVideo(uri: Uri, tempDurationMillis: Long = 0) {
         val me = safeMe()
         val target = safeTarget()
         if (me.isEmpty() || target.isEmpty()) return
@@ -914,7 +966,7 @@ class ChatViewModel : ViewModel() {
                             timestamp = System.currentTimeMillis(),
                             isGroup = false,
                             senderName = _myName.value,
-                            expiryTime = if (tempDurationHours > 0) System.currentTimeMillis() + (tempDurationHours * 3_600_000L) else null
+                            tempDurationMillis = if (tempDurationMillis > 0) tempDurationMillis else null
                         )
                     )
                 }
@@ -955,6 +1007,9 @@ class ChatViewModel : ViewModel() {
 
                 val friendProf = db.child("users").child(friend).get().await().getValue(UserProfile::class.java)
 
+                val summarySnap = db.child("chats").child(me).child(friend).get().await()
+                val existingSummary = summarySnap.getValue(ChatSummary::class.java)
+
                 val summary = ChatSummary(
                     friendId = friend,
                     lastMessage = lastMsgText,
@@ -965,19 +1020,31 @@ class ChatViewModel : ViewModel() {
                     isGroup = false,
                     isOnline = friendProf?.isOnline ?: false,
                     hasUnread = false,
-                    presenceStatus = friendProf?.presenceStatus ?: "Online"
+                    presenceStatus = friendProf?.presenceStatus ?: "Online",
+                    isPinned = existingSummary?.isPinned ?: false,
+                    isMuted = existingSummary?.isMuted ?: false,
+                    isEphemeral = existingSummary?.isEphemeral ?: false,
+                    tempDuration = existingSummary?.tempDuration ?: 0L
                 )
 
                 db.child("chats").child(me).child(friend).setValue(summary)
 
                 val meProf = db.child("users").child(me).get().await().getValue(UserProfile::class.java)
+                
+                val friendSummarySnap = db.child("chats").child(friend).child(me).get().await()
+                val existingFriendSummary = friendSummarySnap.getValue(ChatSummary::class.java)
+
                 db.child("chats").child(friend).child(me).setValue(
                     summary.copy(
                         friendId = me,
                         friendName = meProf?.name ?: me,
                         friendPhotoUrl = meProf?.photoUrl,
                         hasUnread = true,
-                        presenceStatus = meProf?.presenceStatus ?: "Online"
+                        presenceStatus = meProf?.presenceStatus ?: "Online",
+                        isPinned = existingFriendSummary?.isPinned ?: false,
+                        isMuted = existingFriendSummary?.isMuted ?: false,
+                        isEphemeral = existingFriendSummary?.isEphemeral ?: false,
+                        tempDuration = existingFriendSummary?.tempDuration ?: 0L
                     )
                 )
             } catch (e: Exception) {
@@ -1102,6 +1169,8 @@ class ChatViewModel : ViewModel() {
         val path = messagePath(me, target)
         currentChatPath = path
 
+        startEphemeralCleanup(target)
+
         messagesListener = object : ValueEventListener {
             override fun onDataChange(s: DataSnapshot) {
                 val now = System.currentTimeMillis()
@@ -1127,6 +1196,30 @@ class ChatViewModel : ViewModel() {
         }
 
         db.child(path).addValueEventListener(messagesListener!!)
+    }
+
+    private fun startEphemeralCleanup(target: String) {
+        ephemeralCleanupJob?.cancel()
+        ephemeralCleanupJob = viewModelScope.launch {
+            while (isActive) {
+                delay(1000)
+                val now = System.currentTimeMillis()
+                val currentMsgs = _messages.value
+                val hasExpired = currentMsgs.any { it.expiryTime != null && it.expiryTime!! < now }
+                
+                if (hasExpired) {
+                    val filtered = currentMsgs.filter { it.expiryTime == null || it.expiryTime!! > now }
+                    _messages.value = filtered
+                    
+                    // Cleanup DB
+                    currentMsgs.forEach {
+                        if (it.expiryTime != null && it.expiryTime!! < now) {
+                            deleteMessage(it.id, target)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private fun downloadAudioIfNeeded(msg: Message) {
@@ -1352,6 +1445,13 @@ class ChatViewModel : ViewModel() {
                 callback?.invoke(false)
             }
         }
+    }
+
+    fun toggleScreenshotBlock(friendId: String, currentStatus: Boolean) {
+        val me = safeMe()
+        if (me.isEmpty() || friendId.isEmpty()) return
+        
+        db.child("chats").child(me).child(friendId).child("isScreenshotDisabled").setValue(!currentStatus)
     }
 
     fun deleteAccount(callback: (Boolean, String?) -> Unit) {
@@ -1734,6 +1834,17 @@ class ChatViewModel : ViewModel() {
         db.child("chats").child(me).child(friendId).child("isMuted").setValue(!currentStatus)
     }
 
+    fun setTempMessageDuration(friendId: String, duration: Long) {
+        val me = safeMe()
+        if (me.isEmpty() || friendId.isEmpty()) return
+        val updates = mapOf(
+            "tempDuration" to duration,
+            "isEphemeral" to (duration > 0)
+        )
+        db.child("chats").child(me).child(friendId).updateChildren(updates)
+        db.child("chats").child(friendId).child(me).updateChildren(updates)
+    }
+
     fun clearCallHistory() {
         val me = safeMe()
         if (me.isEmpty()) return
@@ -1820,7 +1931,7 @@ class ChatViewModel : ViewModel() {
         _pendingSharedMedia.value = emptyList()
     }
 
-    fun sendPendingShare(targetId: String, tempDuration: Int = 0) {
+    fun sendPendingShare(targetId: String, tempDurationMillis: Long = 0) {
         val text = _pendingSharedText.value
         val media = _pendingSharedMedia.value
 
@@ -1828,17 +1939,36 @@ class ChatViewModel : ViewModel() {
 
         viewModelScope.launch {
             if (!text.isNullOrBlank()) {
-                sendMessage(text, tempDuration)
+                sendMessage(text, tempDurationMillis)
             }
             media.forEach { uri ->
                 val mime = FriendApplication.instance.contentResolver.getType(uri)
                 if (mime?.startsWith("video") == true) {
-                    uploadVideo(uri, tempDuration)
+                    uploadVideo(uri, tempDurationMillis)
                 } else {
-                    uploadImage(uri, tempDuration)
+                    uploadImage(uri, tempDurationMillis)
                 }
             }
             clearPendingShare()
         }
+    }
+
+    fun notifyScreenshotAttempt() {
+        val me = safeMe()
+        val target = safeTarget()
+        if (me.isEmpty() || target.isEmpty()) return
+
+        val msgId = db.push().key ?: return
+        val msg = Message(
+            id = msgId,
+            senderId = me,
+            receiverId = target,
+            text = "Tentou tirar um print da tela! 📸",
+            timestamp = System.currentTimeMillis(),
+            isGroup = false,
+            senderName = _myName.value,
+            isEdited = false, // Usar um campo para sinalizar aviso do sistema se quiser, ou texto simples
+        )
+        sendMessageObject(msg)
     }
 }

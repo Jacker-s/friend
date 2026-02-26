@@ -27,13 +27,15 @@ fun MessageListContent(
     listState: LazyListState,
     myUsername: String,
     targetProfile: UserProfile?,
+    showReadReceipts: Boolean = true,
     onImageClick: (String) -> Unit,
     onVideoClick: (String) -> Unit,
     onDelete: (Message) -> Unit,
     onReply: (Message) -> Unit,
     onReact: (Message, String) -> Unit,
     onEdit: (Message) -> Unit,
-    onPin: (Message) -> Unit
+    onPin: (Message) -> Unit,
+    onAudioPlayed: (Message) -> Unit
 ) {
     LazyColumn(
         state = listState,
@@ -64,13 +66,15 @@ fun MessageListContent(
                 targetPhotoUrl = targetProfile?.photoUrl,
                 isFirstInGroup = isFirstInGroup,
                 isLastInGroup = isLastInGroup,
+                showReadReceipts = showReadReceipts,
                 onImageClick = onImageClick,
                 onVideoClick = onVideoClick,
                 onDelete = { onDelete(message) },
                 onReply = { onReply(message) },
                 onReact = { onReact(message, it) },
                 onEdit = { onEdit(message) },
-                onPin = { onPin(message) }
+                onPin = { onPin(message) },
+                onAudioPlayed = { onAudioPlayed(message) }
             )
         }
     }

@@ -19,6 +19,7 @@ import androidx.core.app.RemoteInput
 import androidx.core.graphics.drawable.IconCompat
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.ServerValue
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.google.gson.Gson
@@ -51,7 +52,12 @@ class FriendMessagingService : FirebaseMessagingService() {
                     if (isCall) {
                         handleIncomingCall(message)
                     } else {
-                        if (FriendApplication.isAppInForeground && FriendApplication.currentOpenedChatId == message.senderId) return
+                        val isChatOpen = FriendApplication.isAppInForeground && FriendApplication.currentOpenedChatId == message.senderId
+                        
+                        // Atualiza o resumo, mas define 'hasUnread' como falso se a conversa já estiver aberta
+                        updateChatSummaryOnMessage(message, !isChatOpen)
+
+                        if (isChatOpen) return
                         
                         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                         val cachedUsername = prefs.getString(KEY_MY_USERNAME, null)
@@ -77,6 +83,38 @@ class FriendMessagingService : FirebaseMessagingService() {
                     Log.e(TAG, "Error processing FCM: ${e.message}")
                 }
             }
+        }
+    }
+
+    private fun updateChatSummaryOnMessage(msg: Message, setAsUnread: Boolean) {
+        val db = FirebaseDatabase.getInstance().reference
+        val sender = msg.senderId
+        val receiver = msg.receiverId
+        
+        val lastMsgText = when {
+            msg.audioUrl != null -> "🎤 Áudio"
+            msg.imageUrl != null -> "📷 Imagem"
+            msg.videoUrl != null -> "📹 Vídeo"
+            msg.stickerUrl != null -> "Sticker"
+            else -> msg.text
+        }
+
+        // Atualiza o resumo para o receptor (eu)
+        db.child("users").child(sender).get().addOnSuccessListener { snapshot ->
+            val senderProfile = snapshot.getValue(UserProfile::class.java)
+            val summary = ChatSummary(
+                friendId = sender,
+                lastMessage = lastMsgText,
+                timestamp = msg.timestamp,
+                lastSenderId = sender,
+                friendName = senderProfile?.name ?: sender,
+                friendPhotoUrl = senderProfile?.photoUrl,
+                isGroup = false,
+                isOnline = senderProfile?.isOnline ?: false,
+                hasUnread = setAsUnread, 
+                presenceStatus = senderProfile?.presenceStatus ?: "Online"
+            )
+            db.child("chats").child(receiver).child(sender).setValue(summary)
         }
     }
 
@@ -144,6 +182,8 @@ class FriendMessagingService : FirebaseMessagingService() {
             .setContentIntent(pendingIntent)
             .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))
             .setColor(0xFF007AFF.toInt())
+            .setShortcutId(chatId) 
+            .setLocusId(androidx.core.content.LocusIdCompat(chatId))
 
         // 1. Download IMEDIATO da imagem do remetente
         val senderBitmap = downloadBitmap(message.senderPhotoUrl)
@@ -151,16 +191,23 @@ class FriendMessagingService : FirebaseMessagingService() {
         
         val senderPerson = Person.Builder()
             .setName(senderName)
-            .setIcon(senderIcon) // <--- CRUCIAL para a foto aparecer no círculo
+            .setIcon(senderIcon) 
             .build()
 
         val messagingStyle = NotificationCompat.MessagingStyle(userPerson)
             .setConversationTitle(if (message.isGroup) senderName else null)
             .setGroupConversation(message.isGroup)
 
-        // 2. Download da imagem da mensagem (se houver)
+        // 2. Download da imagem da mensagem ou texto alternativo para áudio
         val messageBitmap = if (message.isImage) downloadBitmap(message.imageUrl) else null
-        val msgText = if (message.isImage) "📷 Imagem" else message.text
+        val msgText = when {
+            message.isImage -> "📷 Imagem"
+            message.isAudio -> "🎤 Mensagem de áudio"
+            message.isVideo -> "📹 Vídeo"
+            message.isSticker -> "Sticker"
+            else -> message.text
+        }
+
         val notificationMessage = NotificationCompat.MessagingStyle.Message(msgText, message.timestamp, senderPerson)
 
         if (messageBitmap != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {

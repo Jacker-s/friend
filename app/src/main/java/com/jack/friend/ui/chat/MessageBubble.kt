@@ -77,13 +77,15 @@ fun MetaMessageBubble(
     targetPhotoUrl: String?,
     isFirstInGroup: Boolean,
     isLastInGroup: Boolean,
+    showReadReceipts: Boolean = true, // Adicionado
     onImageClick: (String) -> Unit,
     onVideoClick: (String) -> Unit,
     onDelete: (String) -> Unit,
     onReply: () -> Unit,
     onReact: (String) -> Unit,
     onEdit: () -> Unit,
-    onPin: () -> Unit
+    onPin: () -> Unit,
+    onAudioPlayed: () -> Unit = {}
 ) {
     val chatColors = LocalChatColors.current
     val isSingleEmoji = AnimatedEmojiHelper.isSingleEmoji(message.text) && message.imageUrl == null && message.audioUrl == null && message.videoUrl == null && message.replyToId == null
@@ -276,7 +278,14 @@ fun MetaMessageBubble(
                                 }
                             }
 
-                            if (message.audioUrl != null) AudioPlayerBubble(message.audioUrl!!, message.localAudioPath, isMe)
+                            if (message.audioUrl != null) AudioPlayerBubble(
+                                url = message.audioUrl!!, 
+                                localPath = message.localAudioPath, 
+                                isMe = isMe,
+                                isPlayed = message.audioPlayed,
+                                durationSeconds = message.audioDurationSeconds,
+                                onPlay = { if (!isMe && !message.audioPlayed) onAudioPlayed() }
+                            )
 
                             if (message.linkPreview != null) {
                                 LinkPreviewCard(preview = message.linkPreview!!, isMe = isMe)
@@ -308,13 +317,14 @@ fun MetaMessageBubble(
                                     )
                                     if (isMe) {
                                         Spacer(Modifier.width(4.dp))
-                                        val statusIconColor = if (message.isRead) {
+                                        val isReadToDisplay = message.isRead && showReadReceipts
+                                        val statusIconColor = if (isReadToDisplay) {
                                             if (isColorDark(bubbleColor)) Color.Cyan else chatColors.primary
                                         } else {
                                             textColor.copy(0.6f)
                                         }
                                         Icon(
-                                            if (message.isRead) Icons.Default.DoneAll else Icons.Default.Check, 
+                                            if (isReadToDisplay) Icons.Default.DoneAll else Icons.Default.Check,
                                             null, 
                                             tint = statusIconColor, 
                                             modifier = Modifier.size(13.dp)
@@ -560,7 +570,14 @@ fun SwiftUIDivider() {
 }
 
 @Composable
-fun AudioPlayerBubble(url: String, localPath: String?, isMe: Boolean) {
+fun AudioPlayerBubble(
+    url: String, 
+    localPath: String?, 
+    isMe: Boolean,
+    isPlayed: Boolean,
+    durationSeconds: Long?,
+    onPlay: () -> Unit
+) {
     var isPlaying by remember { mutableStateOf(false) }
     var progress by remember { mutableFloatStateOf(0f) }
     val mediaPlayer = remember { MediaPlayer() }
@@ -569,6 +586,17 @@ fun AudioPlayerBubble(url: String, localPath: String?, isMe: Boolean) {
         if (isColorDark(chatColors.bubbleMe)) Color.White else Color.Black
     } else {
         chatColors.textPrimary
+    }
+    
+    val playedColor = chatColors.primary // Usa a cor primária do tema atual para o áudio ouvido
+
+    val formattedDuration = remember(durationSeconds) {
+        if (durationSeconds == null || durationSeconds <= 0) ""
+        else {
+            val mins = durationSeconds / 60
+            val secs = durationSeconds % 60
+            String.format(Locale.getDefault(), "%d:%02d", mins, secs)
+        }
     }
 
     LaunchedEffect(isPlaying) {
@@ -596,6 +624,7 @@ fun AudioPlayerBubble(url: String, localPath: String?, isMe: Boolean) {
                     mediaPlayer.pause()
                     isPlaying = false
                 } else {
+                    onPlay()
                     try {
                         if (progress > 0f && progress < 0.99f) {
                             mediaPlayer.start()
@@ -617,41 +646,56 @@ fun AudioPlayerBubble(url: String, localPath: String?, isMe: Boolean) {
             Icon(
                 imageVector = if (isPlaying) Icons.Rounded.PauseCircleFilled else Icons.Rounded.PlayCircleFilled, 
                 contentDescription = null, 
-                tint = textColor, 
+                tint = if (isPlayed && !isMe) playedColor else textColor, 
                 modifier = Modifier.size(38.dp)
             )
         }
         Spacer(Modifier.width(10.dp))
         Column(modifier = Modifier.weight(1f)) {
-            AudioVisualizer(isPlaying = isPlaying, color = textColor)
+            AudioVisualizer(isPlaying = isPlaying, color = if (isPlayed && !isMe) playedColor else textColor)
             Spacer(Modifier.height(6.dp))
             LinearProgressIndicator(
                 progress = { progress }, 
                 modifier = Modifier.fillMaxWidth().height(3.dp).clip(CircleShape), 
-                color = if (isMe) textColor else chatColors.primary,
+                color = if (isMe) textColor else if (isPlayed) playedColor else chatColors.primary,
                 trackColor = textColor.copy(alpha = 0.2f)
             )
         }
         Spacer(Modifier.width(10.dp))
-        Icon(Icons.Rounded.Mic, null, tint = textColor.copy(alpha = 0.6f), modifier = Modifier.size(18.dp))
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                Icons.Rounded.Mic, 
+                null, 
+                tint = if (isPlayed && !isMe) playedColor else textColor.copy(alpha = 0.6f), 
+                modifier = Modifier.size(18.dp)
+            )
+            if (formattedDuration.isNotEmpty()) {
+                Text(
+                    text = formattedDuration,
+                    fontSize = 9.sp,
+                    color = (if (isPlayed && !isMe) playedColor else textColor).copy(alpha = 0.7f),
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
     }
 }
 
 @Composable
 fun AudioVisualizer(isPlaying: Boolean, color: Color) {
-    val infiniteTransition = rememberInfiniteTransition(label = "visualizer")
     val heights = remember { List(18) { (4..14).random() } }
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
         heights.forEachIndexed { index, baseHeight ->
             val duration = remember { (300..600).random() }
-            val animatedHeight by if (isPlaying) {
-                infiniteTransition.animateFloat(
+            val animatedHeight = if (isPlaying) {
+                val transition = rememberInfiniteTransition(label = "visualizer")
+                transition.animateFloat(
                     initialValue = 0.4f,
                     targetValue = 1f,
                     animationSpec = infiniteRepeatable(tween(duration), RepeatMode.Reverse),
                     label = "bar_$index"
-                )
-            } else remember { mutableFloatStateOf(1f) }
+                ).value
+            } else 1f
 
             Box(
                 modifier = Modifier.width(2.dp)
